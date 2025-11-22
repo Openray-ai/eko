@@ -1,0 +1,47 @@
+server:
+  port: "8080"
+  host: "0.0.0.0"
+
+# Proxy configuration for AI providers
+proxy:
+  openai:
+    enabled: true
+    base_url: "https://api.openai.com/v1"
+    timeout: 30
+
+  anthropic:
+    enabled: true
+    base_url: "https://api.anthropic.com/v1"
+    timeout: 30
+
+  google:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com/v1"
+    timeout: 30
+
+  behavior:
+    on_violation: "sanitize"  # Options: block, sanitize, warn
+    log_requests: true
+    add_violation_headers: true
+
+# Pattern management
+patterns:
+  config_file: "./patterns/default/patterns.yaml"
+  custom_patterns_dir: "./patterns/custom"
+
+# Alerting configuration
+alerts:
+  webhooks:
+    - url: "https://hooks.slack.com/services/YOUR/WEBHOOK"
+      severity: ["BLOCK"]
+  email:
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    from: "alerts@company.com"
+    to: ["security@company.com"]
+
+# Compliance reporting
+compliance:
+  enable_reporting: true
+  report_dir: "./reports"
+  retention_days: 90

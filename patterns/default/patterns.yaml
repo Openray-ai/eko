@@ -1,0 +1,145 @@
+patterns:
+  # API Keys and Credentials
+  - name: "openai_api_key"
+    regex: "sk-[a-zA-Z0-9]{48}"
+    type: "credential"
+    severity: "BLOCK"
+    description: "OpenAI API key"
+
+  - name: "anthropic_api_key"
+    regex: "sk-ant-[a-zA-Z0-9\\-]{95,}"
+    type: "credential"
+    severity: "BLOCK"
+    description: "Anthropic API key"
+
+  - name: "google_api_key"
+    regex: "AIza[0-9A-Za-z\\-_]{35}"
+    type: "credential"
+    severity: "BLOCK"
+    description: "Google API key"
+
+  - name: "aws_access_key"
+    regex: "AKIA[0-9A-Z]{16}"
+    type: "credential"
+    severity: "BLOCK"
+    description: "AWS Access Key ID"
+
+  # Database Connection Strings
+  - name: "postgres_connection"
+    regex: "postgres://[^\\s]+"
+    type: "credential"
+    severity: "BLOCK"
+    description: "PostgreSQL connection string"
+
+  - name: "mongodb_connection"
+    regex: "mongodb(\\+srv)?://[^\\s]+"
+    type: "credential"
+    severity: "BLOCK"
+    description: "MongoDB connection string"
+
+  - name: "mysql_connection"
+    regex: "mysql://[^\\s]+"
+    type: "credential"
+    severity: "BLOCK"
+    description: "MySQL connection string"
+
+  # JWT Tokens
+  - name: "jwt_token"
+    regex: "eyJ[a-zA-Z0-9_-]*\\.eyJ[a-zA-Z0-9_-]*\\.[a-zA-Z0-9_-]*"
+    type: "credential"
+    severity: "BLOCK"
+    description: "JWT token"
+
+  # Email Addresses
+  - name: "email"
+    regex: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    type: "pii"
+    severity: "WARN"
+    description: "Email address"
+
+  # Nigerian Patterns
+  - name: "nigerian_bvn"
+    regex: "\\b[0-9]{11}\\b"
+    type: "pii"
+    severity: "BLOCK"
+    description: "Nigerian Bank Verification Number (BVN)"
+
+  - name: "nigerian_phone"
+    regex: "\\+234[0-9]{10}|0[789][01][0-9]{8}"
+    type: "pii"
+    severity: "WARN"
+    description: "Nigerian phone number"
+
+  - name: "nigerian_account"
+    regex: "\\b[0-9]{10}\\b"
+    type: "financial"
+    severity: "BLOCK"
+    description: "Nigerian bank account number (NUBAN)"
+
+  # Kenyan Patterns
+  - name: "kenyan_phone"
+    regex: "\\+254[0-9]{9}|0[7][0-9]{8}"
+    type: "pii"
+    severity: "WARN"
+    description: "Kenyan phone number"
+
+  - name: "mpesa_code"
+    regex: "\\b[A-Z]{2}[0-9]{8}\\b"
+    type: "financial"
+    severity: "BLOCK"
+    description: "M-Pesa transaction code"
+
+  # South African Patterns
+  - name: "south_african_id"
+    regex: "\\b[0-9]{13}\\b"
+    type: "pii"
+    severity: "BLOCK"
+    description: "South African ID number"
+
+  - name: "south_african_phone"
+    regex: "\\+27[0-9]{9}|0[6-8][0-9]{8}"
+    type: "pii"
+    severity: "WARN"
+    description: "South African phone number"
+
+  # Ghanaian Patterns
+  - name: "ghanaian_phone"
+    regex: "\\+233[0-9]{9}|0[2-5][0-9]{8}"
+    type: "pii"
+    severity: "WARN"
+    description: "Ghanaian phone number"
+
+  # Credit Card Numbers (Luhn algorithm should be applied separately)
+  - name: "credit_card"
+    regex: "\\b[0-9]{13,19}\\b"
+    type: "financial"
+    severity: "BLOCK"
+    description: "Credit card number"
+
+  # IBAN
+  - name: "iban"
+    regex: "[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}"
+    type: "financial"
+    severity: "BLOCK"
+    description: "International Bank Account Number"
+
+  # SWIFT/BIC
+  - name: "swift_code"
+    regex: "[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?"
+    type: "financial"
+    severity: "BLOCK"
+    description: "SWIFT/BIC code"
+
+  # SSH Private Keys
+  - name: "ssh_private_key"
+    regex: "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
+    type: "credential"
+    severity: "BLOCK"
+    description: "SSH private key"
+
+  # Generic Password Patterns
+  - name: "password_var"
+    regex: "(password|passwd|pwd)\\s*[:=]\\s*['\"]?[^\\s'\"]{8,}['\"]?"
+    type: "credential"
+    severity: "BLOCK"
+    description: "Password in environment variable or config"

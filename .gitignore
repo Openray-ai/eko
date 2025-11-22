@@ -1,0 +1,54 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/cmd/eko/eko
+/eko
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config files (use .example as templates)
+configs/config.yaml
+*.env
+.env
+
+# Logs
+*.log
+logs/
+
+# Reports
+reports/
+
+# Custom patterns (may contain sensitive data)
+patterns/custom/*.yaml
+!patterns/custom/.gitkeep
+
+# Build artifacts
+dist/
+build/
+bin/

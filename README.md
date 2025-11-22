@@ -484,17 +484,6 @@ Legal     → Ekō → Local LLM (stays on-prem)
 
 ---
 
-## 📚 Documentation
-
-- [Full Documentation](https://docs.openray.ai/eko)
-- [API Reference](https://docs.openray.ai/eko/api)
-- [Integration Examples](https://docs.openray.ai/eko/integrations)
-- [Pattern Guide](https://docs.openray.ai/eko/patterns)
-- [Deployment Guide](https://docs.openray.ai/eko/deployment)
-- [Compliance Mapping](https://docs.openray.ai/eko/compliance)
-
----
-
 ## 🗺️ Roadmap
 
 **✅ Phase 1: Core (Current)**
