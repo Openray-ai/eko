@@ -52,3 +52,5 @@ compliance:
   enable_reporting: true
   report_dir: "./reports"
   retention_days: 90
+
+  allowed_origins: ["http://localhost:3000","http://localhost:3001", "http://localhost:8080", "https://eko.openray.ai"]

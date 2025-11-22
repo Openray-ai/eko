@@ -17,7 +17,7 @@ func NewHealthHandler() *HealthHandler {
 // Handle processes health check requests
 func (h *HealthHandler) Handle(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status": "healthy",
+		"status":  "healthy",
 		"service": "eko",
 	})
 }

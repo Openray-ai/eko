@@ -4,8 +4,15 @@ import (
 	"fmt"
 	"os"
 
+	"eko/internal/helpers/logger"
+
 	"github.com/goccy/go-yaml"
 )
+
+// Config represents the application configuration
+type CorsConfig struct {
+	AllowedOrigins []string `yaml:"allowed_origins"`
+}
 
 // Config represents the application configuration
 type Config struct {
@@ -15,6 +22,7 @@ type Config struct {
 	Patterns   PatternsConfig   `yaml:"patterns"`
 	Alerts     AlertsConfig     `yaml:"alerts"`
 	Compliance ComplianceConfig `yaml:"compliance"`
+	Cors       CorsConfig       `yaml:"cors"`
 }
 
 // ServerConfig holds server configuration
@@ -48,15 +56,15 @@ type ProviderConfig struct {
 
 // BehaviorConfig defines how the proxy behaves on violations
 type BehaviorConfig struct {
-	OnViolation          string `yaml:"on_violation"` // block, sanitize, warn
-	LogRequests          bool   `yaml:"log_requests"`
-	AddViolationHeaders  bool   `yaml:"add_violation_headers"`
+	OnViolation         string `yaml:"on_violation"` // block, sanitize, warn
+	LogRequests         bool   `yaml:"log_requests"`
+	AddViolationHeaders bool   `yaml:"add_violation_headers"`
 }
 
 // PatternsConfig holds pattern loading configuration
 type PatternsConfig struct {
-	ConfigFile         string `yaml:"config_file"`
-	CustomPatternsDir  string `yaml:"custom_patterns_dir"`
+	ConfigFile        string `yaml:"config_file"`
+	CustomPatternsDir string `yaml:"custom_patterns_dir"`
 }
 
 // AlertsConfig holds alerting configuration
@@ -90,6 +98,10 @@ type ComplianceConfig struct {
 func Load(filename string) (*Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
+		logger.Error("Failed to read config file", logger.Fields{
+			"error":       err.Error(),
+			"config_path": filename,
+		})
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
@@ -109,7 +121,7 @@ func Default() *Config {
 			Host: "0.0.0.0",
 		},
 		Logging: LoggingConfig{
-			Level:    "info",
+			Level:    "debug",
 			Format:   "text",
 			Colorize: true,
 		},
