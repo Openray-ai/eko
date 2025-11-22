@@ -1,0 +1,194 @@
+---
+description: Ensures consistent logging and proper usage of the Ekō logger throughout the codebase
+alwaysApply: true
+---
+
+# Logger Usage Guidelines
+
+## Import and Basic Usage
+
+Always use the Ekō logger instead of standard library `log` package:
+
+```go
+import "eko/internal/helpers/logger"
+
+// Simple logging
+logger.Info("Server started")
+logger.Error("Database connection failed")
+logger.Debug("Processing request")
+
+// Formatted logging
+logger.Infof("Server listening on port %d", 8080)
+logger.Errorf("Failed to connect: %v", err)
+```
+
+## Log Levels
+
+Use appropriate log levels for different scenarios:
+
+| Level | When to Use | Example |
+|-------|------------|---------|
+| `Debug` | Detailed diagnostic info, variable values | `logger.Debug("Variable value", logger.Fields{"value": x})` |
+| `Info` | General information, normal operations | `logger.Info("Server started", logger.Fields{"port": 8080})` |
+| `Warn` | Warning conditions, potential issues | `logger.Warn("High memory usage", logger.Fields{"usage": "85%"})` |
+| `Error` | Error conditions that need attention | `logger.Error("Database error", logger.Fields{"error": err})` |
+| `Fatal` | Critical errors that exit the program | `logger.Fatal("Config load failed", logger.Fields{"path": path})` |
+
+## Structured Logging with Fields
+
+**ALWAYS prefer structured logging with `logger.Fields` over formatted strings:**
+
+✅ **Good - Structured and Searchable:**
+```go
+logger.Error("Payment processing failed", logger.Fields{
+    "transaction_id": txID,
+    "amount":        100.50,
+    "currency":      "USD",
+    "error":         err.Error(),
+})
+```
+
+❌ **Avoid - Unstructured:**
+```go
+logger.Errorf("Payment failed for transaction %s: %v", txID, err)
+```
+
+## Request-Scoped Logging
+
+For HTTP handlers and request processing, create contextual loggers:
+
+```go
+func handleRequest(c *gin.Context) {
+    // Create request-scoped logger
+    log := logger.WithFields(logger.Fields{
+        "request_id": c.GetHeader("X-Request-ID"),
+        "path":       c.Request.URL.Path,
+        "method":     c.Request.Method,
+    })
+
+    log.Info("Request received")
+    
+    // Use throughout request lifecycle
+    log.Info("Request completed", logger.Fields{
+        "status":      c.Writer.Status(),
+        "duration_ms": 123,
+    })
+}
+```
+
+## Error Handling Pattern
+
+When handling errors, always log with context:
+
+```go
+result, err := sanitize(data)
+if err != nil {
+    logger.Error("Sanitization failed", logger.Fields{
+        "error":       err.Error(),
+        "data_length": len(data),
+    })
+    return err
+}
+
+logger.Info("Sanitization successful", logger.Fields{
+    "violations": len(result.Violations),
+    "safe":       result.Safe,
+})
+```
+
+## Security - Never Log Sensitive Data
+
+**NEVER log sensitive information:**
+
+❌ **Never Log:**
+- Passwords
+- API keys
+- Tokens
+- Credit card numbers
+- Personal identifiable information (PII) without anonymization
+
+✅ **Safe Logging:**
+```go
+logger.Info("Login attempt", logger.Fields{
+    "username": username,
+    // Do NOT log password
+})
+```
+
+## Performance Optimization
+
+For expensive operations, check log level before evaluation:
+
+```go
+if logger.Default().GetLevel() <= logger.DebugLevel {
+    logger.Debug("Detailed state", logger.Fields{
+        "state": expensiveStateSnapshot(),
+    })
+}
+```
+
+## Initialization Pattern
+
+At application startup:
+
+```go
+func main() {
+    logger.Initialize(logger.Config{
+        Level:      logger.InfoLevel,
+        Output:     os.Stdout,
+        JSONFormat: os.Getenv("ENV") == "production",
+        Colorize:   os.Getenv("ENV") != "production",
+    })
+
+    logger.Info("Starting Ekō", logger.Fields{
+        "version": "1.0.0",
+        "env":     os.Getenv("ENV"),
+    })
+}
+```
+
+## Common Patterns
+
+### Startup/Shutdown:
+```go
+logger.Info("Service starting", logger.Fields{"component": "api"})
+logger.Info("Service stopped", logger.Fields{"component": "api"})
+```
+
+### Configuration Loading:
+```go
+logger.Info("Configuration loaded", logger.Fields{
+    "config_path": path,
+    "log_level":   cfg.Logging.Level,
+})
+```
+
+### External API Calls:
+```go
+logger.Debug("Calling external API", logger.Fields{
+    "url":    apiURL,
+    "method": "POST",
+})
+```
+
+### Database Operations:
+```go
+logger.Error("Database query failed", logger.Fields{
+    "query":    "SELECT * FROM users",
+    "error":    err.Error(),
+    "duration": duration.Milliseconds(),
+})
+```
+
+## Rules Summary
+
+1. ✅ Always use `eko/internal/helpers/logger` instead of standard `log`
+2. ✅ Prefer structured logging with `logger.Fields` over formatted strings
+3. ✅ Use appropriate log levels (Debug/Info/Warn/Error/Fatal)
+4. ✅ Create request-scoped loggers with `WithFields()` for HTTP handlers
+5. ✅ Always include relevant context in fields
+6. ❌ Never log sensitive data (passwords, tokens, PII)
+7. ✅ Use level checks for expensive debug operations
+8. ✅ Log errors with error field: `"error": err.Error()`
+9. ✅ Use JSON format in production, text format in development
+10. ✅ Add context fields like request_id, user_id, transaction_id for traceability

@@ -2,6 +2,13 @@ server:
   port: "8080"
   host: "0.0.0.0"
 
+# Logging configuration
+logging:
+  level: "info"        # Options: debug, info, warn, error, fatal
+  format: "text"       # Options: text, json
+  colorize: true       # Enable colored output (recommended for development)
+  output_file: ""      # Optional: path to log file (empty for stdout)
+
 # Proxy configuration for AI providers
 proxy:
   openai:

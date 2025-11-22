@@ -10,6 +10,7 @@ import (
 // Config represents the application configuration
 type Config struct {
 	Server     ServerConfig     `yaml:"server"`
+	Logging    LoggingConfig    `yaml:"logging"`
 	Proxy      ProxyConfig      `yaml:"proxy"`
 	Patterns   PatternsConfig   `yaml:"patterns"`
 	Alerts     AlertsConfig     `yaml:"alerts"`
@@ -20,6 +21,14 @@ type Config struct {
 type ServerConfig struct {
 	Port string `yaml:"port"`
 	Host string `yaml:"host"`
+}
+
+// LoggingConfig holds logging configuration
+type LoggingConfig struct {
+	Level      string `yaml:"level"`       // debug, info, warn, error, fatal
+	Format     string `yaml:"format"`      // text, json
+	Colorize   bool   `yaml:"colorize"`    // Enable colored output
+	OutputFile string `yaml:"output_file"` // Optional file output
 }
 
 // ProxyConfig holds proxy configuration for all providers
@@ -98,6 +107,11 @@ func Default() *Config {
 		Server: ServerConfig{
 			Port: "8080",
 			Host: "0.0.0.0",
+		},
+		Logging: LoggingConfig{
+			Level:    "info",
+			Format:   "text",
+			Colorize: true,
 		},
 		Proxy: ProxyConfig{
 			OpenAI: ProviderConfig{
