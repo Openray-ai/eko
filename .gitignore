@@ -52,3 +52,4 @@ patterns/custom/*.yaml
 dist/
 build/
 bin/
+.claude/
