@@ -54,7 +54,7 @@ patterns:
   - name: "email"
     regex: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
     type: "pii"
-    severity: "WARN"
+    severity: "BLOCK"
     description: "Email address"
 
   # Nigerian Patterns
