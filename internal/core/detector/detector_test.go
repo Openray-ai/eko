@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"eko/internal/core/patterns"
 	"regexp"
 	"testing"
 )
@@ -18,7 +19,7 @@ func TestDetector_New(t *testing.T) {
 func TestDetector_LoadPattern(t *testing.T) {
 	d := New()
 
-	pattern := &CompiledPattern{
+	pattern := &patterns.CompiledPattern{
 		Name:        "test_pattern",
 		Regex:       regexp.MustCompile(`test`),
 		Type:        "test",
@@ -62,7 +63,7 @@ func TestDetector_Detect_SinglePattern(t *testing.T) {
 	d := New()
 
 	// Load an email pattern
-	emailPattern := &CompiledPattern{
+	emailPattern := &patterns.CompiledPattern{
 		Name:        "email",
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
 		Type:        "pii",
@@ -100,7 +101,7 @@ func TestDetector_Detect_SinglePattern(t *testing.T) {
 func TestDetector_Detect_MultipleMatches(t *testing.T) {
 	d := New()
 
-	emailPattern := &CompiledPattern{
+	emailPattern := &patterns.CompiledPattern{
 		Name:        "email",
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
 		Type:        "pii",
@@ -143,7 +144,7 @@ func TestDetector_Detect_MultiplePatterns(t *testing.T) {
 	d := New()
 
 	// Load multiple patterns
-	patterns := []*CompiledPattern{
+	patterns := []*patterns.CompiledPattern{
 		{
 			Name:        "email",
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
@@ -201,7 +202,7 @@ func TestDetector_Detect_Deduplication(t *testing.T) {
 	d := New()
 
 	// Load two overlapping patterns
-	patterns := []*CompiledPattern{
+	patterns := []*patterns.CompiledPattern{
 		{
 			Name:        "generic_number",
 			Regex:       regexp.MustCompile(`\d{11}`),
@@ -243,7 +244,7 @@ func TestDetector_Detect_Deduplication(t *testing.T) {
 func TestDetector_Detect_EmptyInput(t *testing.T) {
 	d := New()
 
-	emailPattern := &CompiledPattern{
+	emailPattern := &patterns.CompiledPattern{
 		Name:        "email",
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
 		Type:        "pii",
@@ -266,7 +267,7 @@ func TestDetector_Detect_EmptyInput(t *testing.T) {
 func TestDetector_LoadPatterns(t *testing.T) {
 	d := New()
 
-	patterns := []*CompiledPattern{
+	patternList := []*patterns.CompiledPattern{
 		{
 			Name:        "pattern1",
 			Regex:       regexp.MustCompile(`test1`),
@@ -290,7 +291,7 @@ func TestDetector_LoadPatterns(t *testing.T) {
 		},
 	}
 
-	d.LoadPatterns(patterns)
+	d.LoadPatterns(patternList)
 
 	if count := d.GetPatternCount(); count != 3 {
 		t.Errorf("expected 3 patterns loaded, got %d", count)
@@ -387,7 +388,7 @@ func TestDetector_Overlaps(t *testing.T) {
 func TestDetector_Detect_Positions(t *testing.T) {
 	d := New()
 
-	pattern := &CompiledPattern{
+	pattern := &patterns.CompiledPattern{
 		Name:        "test",
 		Regex:       regexp.MustCompile(`test`),
 		Type:        "test",

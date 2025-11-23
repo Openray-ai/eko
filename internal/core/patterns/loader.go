@@ -1,7 +1,6 @@
 package patterns
 
 import (
-	"eko/internal/core/detector"
 	"eko/internal/helpers/logger"
 	"fmt"
 	"os"
@@ -17,7 +16,7 @@ import (
 type Loader struct {
 	configDir         string
 	customPatternsDir string
-	cache             map[string]*detector.CompiledPattern
+	cache             map[string]*CompiledPattern
 	cacheMu           sync.RWMutex
 }
 
@@ -26,7 +25,7 @@ func NewLoader(configDir string, customPatternsDir string) *Loader {
 	return &Loader{
 		configDir:         configDir,
 		customPatternsDir: customPatternsDir,
-		cache:             make(map[string]*detector.CompiledPattern),
+		cache:             make(map[string]*CompiledPattern),
 	}
 }
 
@@ -46,7 +45,7 @@ func (l *Loader) LoadFromFile(filename string) ([]Pattern, error) {
 }
 
 // CompilePattern compiles a pattern into a detector-ready format with caching
-func (l *Loader) CompilePattern(p Pattern) (*detector.CompiledPattern, error) {
+func (l *Loader) CompilePattern(p Pattern) (*CompiledPattern, error) {
 	// Check cache first
 	l.cacheMu.RLock()
 	if cached, exists := l.cache[p.Name]; exists {
@@ -66,7 +65,7 @@ func (l *Loader) CompilePattern(p Pattern) (*detector.CompiledPattern, error) {
 		return nil, fmt.Errorf("failed to compile pattern %s: %w", p.Name, err)
 	}
 
-	compiled := &detector.CompiledPattern{
+	compiled := &CompiledPattern{
 		Name:        p.Name,
 		Regex:       regex,
 		Type:        p.Type,
@@ -122,7 +121,7 @@ func (l *Loader) validatePattern(p Pattern) error {
 }
 
 // LoadAll loads all patterns from the config directory and custom patterns directory
-func (l *Loader) LoadAll() ([]*detector.CompiledPattern, error) {
+func (l *Loader) LoadAll() ([]*CompiledPattern, error) {
 	var allPatterns []Pattern
 	loadedFiles := 0
 
@@ -159,7 +158,7 @@ func (l *Loader) LoadAll() ([]*detector.CompiledPattern, error) {
 	}
 
 	// Compile all patterns
-	compiled := make([]*detector.CompiledPattern, 0, len(allPatterns))
+	compiled := make([]*CompiledPattern, 0, len(allPatterns))
 	failedCount := 0
 
 	for _, p := range allPatterns {
@@ -176,11 +175,11 @@ func (l *Loader) LoadAll() ([]*detector.CompiledPattern, error) {
 	}
 
 	logger.Info("Pattern loading completed", logger.Fields{
-		"total_files":      loadedFiles,
-		"total_patterns":   len(allPatterns),
-		"compiled":         len(compiled),
-		"failed":           failedCount,
-		"cached":           len(l.cache),
+		"total_files":    loadedFiles,
+		"total_patterns": len(allPatterns),
+		"compiled":       len(compiled),
+		"failed":         failedCount,
+		"cached":         len(l.cache),
 	})
 
 	return compiled, nil
@@ -207,9 +206,9 @@ func (l *Loader) loadFromDirectory(dir string, source string) ([]Pattern, int, e
 			return nil, 0, err
 		}
 		logger.Info("Loaded patterns from file", logger.Fields{
-			"source":  source,
-			"file":    dir,
-			"count":   len(patterns),
+			"source": source,
+			"file":   dir,
+			"count":  len(patterns),
 		})
 		return patterns, 1, nil
 	}
@@ -278,7 +277,7 @@ func (l *Loader) loadYAMLFile(path string) ([]Pattern, error) {
 func (l *Loader) ClearCache() {
 	l.cacheMu.Lock()
 	defer l.cacheMu.Unlock()
-	l.cache = make(map[string]*detector.CompiledPattern)
+	l.cache = make(map[string]*CompiledPattern)
 	logger.Debug("Pattern cache cleared", logger.Fields{})
 }
 

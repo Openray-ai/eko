@@ -1,10 +1,9 @@
 package config
 
 import (
+	"eko/internal/helpers/logger"
 	"fmt"
 	"os"
-
-	"eko/internal/helpers/logger"
 
 	"github.com/goccy/go-yaml"
 )
@@ -152,4 +151,50 @@ func Default() *Config {
 			CustomPatternsDir: "./patterns/custom",
 		},
 	}
+}
+
+func LoadConfig() *Config {
+	configPath := os.Getenv("EKO_CONFIG")
+	if configPath == "" {
+		configPath = "configs/config.yaml"
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		// Use fmt here since logger isn't initialized yet
+		fmt.Printf("Failed to load config from %s: %v\n", configPath, err)
+		fmt.Println("Using default configuration")
+		return Default()
+	}
+
+	return cfg
+}
+
+func InitializeLogger(cfg *Config) {
+	// Parse log level
+	level, err := logger.ParseLevel(cfg.Logging.Level)
+	if err != nil {
+		fmt.Printf("Invalid log level '%s', using INFO: %v\n", cfg.Logging.Level, err)
+		level = logger.InfoLevel
+	}
+
+	// Determine output
+	output := os.Stdout
+	if cfg.Logging.OutputFile != "" {
+		file, err := os.OpenFile(cfg.Logging.OutputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			fmt.Printf("Failed to open log file %s: %v\n", cfg.Logging.OutputFile, err)
+			fmt.Println("Falling back to stdout")
+		} else {
+			output = file
+		}
+	}
+
+	// Initialize logger
+	logger.Initialize(logger.Config{
+		Level:      level,
+		Output:     output,
+		JSONFormat: cfg.Logging.Format == "json",
+		Colorize:   cfg.Logging.Colorize && cfg.Logging.Format != "json",
+	})
 }

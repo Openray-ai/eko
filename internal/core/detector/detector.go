@@ -1,25 +1,16 @@
 package detector
 
 import (
+	"eko/internal/core/patterns"
 	"eko/internal/helpers/logger"
-	"regexp"
 	"sort"
 	"sync"
 )
 
 // Detector handles pattern matching and violation detection
 type Detector struct {
-	patterns map[string]*CompiledPattern
+	patterns map[string]*patterns.CompiledPattern
 	mu       sync.RWMutex
-}
-
-// CompiledPattern represents a compiled regex pattern with metadata
-type CompiledPattern struct {
-	Name        string
-	Regex       *regexp.Regexp
-	Type        string
-	Severity    string
-	Description string
 }
 
 // Violation represents a detected sensitive data match
@@ -35,32 +26,32 @@ type Violation struct {
 // New creates a new Detector instance
 func New() *Detector {
 	return &Detector{
-		patterns: make(map[string]*CompiledPattern),
+		patterns: make(map[string]*patterns.CompiledPattern),
 	}
 }
 
 // Detect scans input text for sensitive patterns using concurrent processing
 func (d *Detector) Detect(input string) ([]Violation, error) {
 	d.mu.RLock()
-	patterns := make([]*CompiledPattern, 0, len(d.patterns))
+	patternList := make([]*patterns.CompiledPattern, 0, len(d.patterns))
 	for _, p := range d.patterns {
-		patterns = append(patterns, p)
+		patternList = append(patternList, p)
 	}
 	d.mu.RUnlock()
 
-	if len(patterns) == 0 {
+	if len(patternList) == 0 {
 		logger.Warn("No patterns loaded for detection", logger.Fields{})
 		return []Violation{}, nil
 	}
 
 	// Channel to collect violations from goroutines
-	violationsChan := make(chan []Violation, len(patterns))
+	violationsChan := make(chan []Violation, len(patternList))
 	var wg sync.WaitGroup
 
 	// Process each pattern concurrently
-	for _, pattern := range patterns {
+	for _, pattern := range patternList {
 		wg.Add(1)
-		go func(p *CompiledPattern) {
+		go func(p *patterns.CompiledPattern) {
 			defer wg.Done()
 			violations := d.detectPattern(input, p)
 			violationsChan <- violations
@@ -89,7 +80,7 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 
 	logger.Debug("Detection completed", logger.Fields{
 		"input_length":     len(input),
-		"patterns_checked": len(patterns),
+		"patterns_checked": len(patternList),
 		"violations_found": len(deduped),
 	})
 
@@ -97,7 +88,7 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 }
 
 // detectPattern finds all matches for a single pattern
-func (d *Detector) detectPattern(input string, pattern *CompiledPattern) []Violation {
+func (d *Detector) detectPattern(input string, pattern *patterns.CompiledPattern) []Violation {
 	matches := pattern.Regex.FindAllStringIndex(input, -1)
 	if len(matches) == 0 {
 		return nil
@@ -180,7 +171,7 @@ func (d *Detector) getSeverityPriority(severity string) int {
 }
 
 // LoadPattern adds a compiled pattern to the detector
-func (d *Detector) LoadPattern(pattern *CompiledPattern) {
+func (d *Detector) LoadPattern(pattern *patterns.CompiledPattern) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -188,16 +179,16 @@ func (d *Detector) LoadPattern(pattern *CompiledPattern) {
 }
 
 // LoadPatterns adds multiple compiled patterns to the detector
-func (d *Detector) LoadPatterns(patterns []*CompiledPattern) {
+func (d *Detector) LoadPatterns(patternList []*patterns.CompiledPattern) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	for _, pattern := range patterns {
+	for _, pattern := range patternList {
 		d.patterns[pattern.Name] = pattern
 	}
 
 	logger.Info("Loaded patterns into detector", logger.Fields{
-		"count": len(patterns),
+		"count": len(patternList),
 		"total": len(d.patterns),
 	})
 }
@@ -220,4 +211,20 @@ func (d *Detector) GetPatternNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func (d *Detector) LoadDefaultPatterns() {
+	loader := patterns.NewLoader("patterns/default", "patterns/custom")
+	compiledPatterns, err := loader.LoadAll()
+	if err != nil {
+		logger.Error("Failed to load patterns", logger.Fields{
+			"error": err.Error(),
+		})
+		logger.Fatal("Cannot start without patterns", logger.Fields{})
+	}
+
+	d.LoadPatterns(compiledPatterns)
+	logger.Info("Patterns loaded successfully", logger.Fields{
+		"count": len(compiledPatterns),
+	})
 }

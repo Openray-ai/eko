@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"eko/internal/core/detector"
+	"eko/internal/core/patterns"
 	"regexp"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ func TestSanitizer_Sanitize_NoViolations(t *testing.T) {
 
 func TestSanitizer_Sanitize_EmailRedaction(t *testing.T) {
 	det := detector.New()
-	emailPattern := &detector.CompiledPattern{
+	emailPattern := &patterns.CompiledPattern{
 		Name:        "email",
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
 		Type:        "pii",
@@ -92,7 +93,7 @@ func TestSanitizer_Sanitize_EmailRedaction(t *testing.T) {
 func TestSanitizer_Sanitize_MultipleViolations(t *testing.T) {
 	det := detector.New()
 
-	patterns := []*detector.CompiledPattern{
+	patterns := []*patterns.CompiledPattern{
 		{
 			Name:        "email",
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
@@ -140,35 +141,35 @@ func TestSanitizer_Sanitize_MultipleViolations(t *testing.T) {
 
 func TestSanitizer_Sanitize_SeverityLevels(t *testing.T) {
 	tests := []struct {
-		name            string
-		severity        string
-		shouldRedact    bool
-		expectedMarker  string
+		name           string
+		severity       string
+		shouldRedact   bool
+		expectedMarker string
 	}{
 		{
-			name:            "BLOCK severity",
-			severity:        "BLOCK",
-			shouldRedact:    true,
-			expectedMarker:  "[REDACTED_EMAIL]",
+			name:           "BLOCK severity",
+			severity:       "BLOCK",
+			shouldRedact:   true,
+			expectedMarker: "[REDACTED_EMAIL]",
 		},
 		{
-			name:            "WARN severity",
-			severity:        "WARN",
-			shouldRedact:    true,
-			expectedMarker:  "[WARNING_EMAIL]",
+			name:           "WARN severity",
+			severity:       "WARN",
+			shouldRedact:   true,
+			expectedMarker: "[WARNING_EMAIL]",
 		},
 		{
-			name:            "LOG severity",
-			severity:        "LOG",
-			shouldRedact:    false,
-			expectedMarker:  "",
+			name:           "LOG severity",
+			severity:       "LOG",
+			shouldRedact:   false,
+			expectedMarker: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			det := detector.New()
-			emailPattern := &detector.CompiledPattern{
+			emailPattern := &patterns.CompiledPattern{
 				Name:        "email",
 				Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
 				Type:        "pii",
@@ -205,7 +206,7 @@ func TestSanitizer_Sanitize_SeverityLevels(t *testing.T) {
 
 func TestSanitizer_Sanitize_PreservesStructure(t *testing.T) {
 	det := detector.New()
-	emailPattern := &detector.CompiledPattern{
+	emailPattern := &patterns.CompiledPattern{
 		Name:        "email",
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
 		Type:        "pii",
@@ -326,7 +327,7 @@ func TestSanitizer_CountRedacted(t *testing.T) {
 func TestSanitizer_Sanitize_RealWorldExample(t *testing.T) {
 	det := detector.New()
 
-	patterns := []*detector.CompiledPattern{
+	patterns := []*patterns.CompiledPattern{
 		{
 			Name:        "email",
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),

@@ -1,5 +1,7 @@
 package patterns
 
+import "regexp"
+
 // Pattern represents a detection pattern definition
 type Pattern struct {
 	Name        string `yaml:"name" json:"name"`
@@ -12,6 +14,15 @@ type Pattern struct {
 // PatternConfig holds pattern configuration from YAML
 type PatternConfig struct {
 	Patterns []Pattern `yaml:"patterns" json:"patterns"`
+}
+
+// CompiledPattern represents a compiled regex pattern with metadata
+type CompiledPattern struct {
+	Name        string
+	Regex       *regexp.Regexp
+	Type        string
+	Severity    string
+	Description string
 }
 
 // PatternType constants
