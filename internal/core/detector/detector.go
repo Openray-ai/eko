@@ -1,7 +1,9 @@
 package detector
 
 import (
+	"eko/internal/helpers/logger"
 	"regexp"
+	"sort"
 	"sync"
 )
 
@@ -27,6 +29,7 @@ type Violation struct {
 	Pattern  string `json:"pattern"`
 	Matched  string `json:"matched"`
 	Position int    `json:"position"`
+	End      int    `json:"end"` // End position for deduplication
 }
 
 // New creates a new Detector instance
@@ -36,17 +39,144 @@ func New() *Detector {
 	}
 }
 
-// Detect scans input text for sensitive patterns
+// Detect scans input text for sensitive patterns using concurrent processing
 func (d *Detector) Detect(input string) ([]Violation, error) {
 	d.mu.RLock()
-	defer d.mu.RUnlock()
+	patterns := make([]*CompiledPattern, 0, len(d.patterns))
+	for _, p := range d.patterns {
+		patterns = append(patterns, p)
+	}
+	d.mu.RUnlock()
 
-	var violations []Violation
+	if len(patterns) == 0 {
+		logger.Warn("No patterns loaded for detection", logger.Fields{})
+		return []Violation{}, nil
+	}
 
-	// TODO: Implement concurrent pattern matching
-	// TODO: Add context-aware detection
+	// Channel to collect violations from goroutines
+	violationsChan := make(chan []Violation, len(patterns))
+	var wg sync.WaitGroup
 
-	return violations, nil
+	// Process each pattern concurrently
+	for _, pattern := range patterns {
+		wg.Add(1)
+		go func(p *CompiledPattern) {
+			defer wg.Done()
+			violations := d.detectPattern(input, p)
+			violationsChan <- violations
+		}(pattern)
+	}
+
+	// Wait for all goroutines to complete and close channel
+	go func() {
+		wg.Wait()
+		close(violationsChan)
+	}()
+
+	// Collect all violations
+	var allViolations []Violation
+	for violations := range violationsChan {
+		allViolations = append(allViolations, violations...)
+	}
+
+	// Deduplicate overlapping violations
+	deduped := d.deduplicateViolations(allViolations)
+
+	// Sort by position for consistent output
+	sort.Slice(deduped, func(i, j int) bool {
+		return deduped[i].Position < deduped[j].Position
+	})
+
+	logger.Debug("Detection completed", logger.Fields{
+		"input_length":     len(input),
+		"patterns_checked": len(patterns),
+		"violations_found": len(deduped),
+	})
+
+	return deduped, nil
+}
+
+// detectPattern finds all matches for a single pattern
+func (d *Detector) detectPattern(input string, pattern *CompiledPattern) []Violation {
+	matches := pattern.Regex.FindAllStringIndex(input, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	violations := make([]Violation, 0, len(matches))
+	for _, match := range matches {
+		start, end := match[0], match[1]
+		matched := input[start:end]
+
+		// Skip empty matches
+		if matched == "" {
+			continue
+		}
+
+		violations = append(violations, Violation{
+			Type:     pattern.Type,
+			Severity: pattern.Severity,
+			Pattern:  pattern.Name,
+			Matched:  matched,
+			Position: start,
+			End:      end,
+		})
+	}
+
+	return violations
+}
+
+// deduplicateViolations removes overlapping violations, keeping higher severity ones
+func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
+	if len(violations) <= 1 {
+		return violations
+	}
+
+	// Sort by position, then by severity priority
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].Position != violations[j].Position {
+			return violations[i].Position < violations[j].Position
+		}
+		return d.getSeverityPriority(violations[i].Severity) > d.getSeverityPriority(violations[j].Severity)
+	})
+
+	// Remove overlapping violations
+	deduped := make([]Violation, 0, len(violations))
+	for _, v := range violations {
+		// Check if this violation overlaps with any already kept
+		overlaps := false
+		for _, kept := range deduped {
+			if d.overlaps(v, kept) {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			deduped = append(deduped, v)
+		}
+	}
+
+	return deduped
+}
+
+// overlaps checks if two violations overlap in position
+func (d *Detector) overlaps(v1, v2 Violation) bool {
+	return (v1.Position >= v2.Position && v1.Position < v2.End) ||
+		(v2.Position >= v1.Position && v2.Position < v1.End)
+}
+
+// getSeverityPriority returns priority value for severity (higher is more important)
+func (d *Detector) getSeverityPriority(severity string) int {
+	switch severity {
+	case "BLOCK":
+		return 3
+	case "WARN":
+		return 2
+	case "LOG":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // LoadPattern adds a compiled pattern to the detector
@@ -55,4 +185,39 @@ func (d *Detector) LoadPattern(pattern *CompiledPattern) {
 	defer d.mu.Unlock()
 
 	d.patterns[pattern.Name] = pattern
+}
+
+// LoadPatterns adds multiple compiled patterns to the detector
+func (d *Detector) LoadPatterns(patterns []*CompiledPattern) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, pattern := range patterns {
+		d.patterns[pattern.Name] = pattern
+	}
+
+	logger.Info("Loaded patterns into detector", logger.Fields{
+		"count": len(patterns),
+		"total": len(d.patterns),
+	})
+}
+
+// GetPatternCount returns the number of loaded patterns
+func (d *Detector) GetPatternCount() int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return len(d.patterns)
+}
+
+// GetPatternNames returns all loaded pattern names
+func (d *Detector) GetPatternNames() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	names := make([]string, 0, len(d.patterns))
+	for name := range d.patterns {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
