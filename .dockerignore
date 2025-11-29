@@ -1,0 +1,132 @@
+# ============================================================================
+# Docker Ignore File for Ekō
+# Excludes unnecessary files from Docker build context
+# Reduces build context size from ~30MB to ~500KB
+# Improves build speed and security
+# ============================================================================
+
+# ============================================================================
+# Build Artifacts (exclude from build context)
+# These are generated during build, not needed as inputs
+# ============================================================================
+bin/
+build/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+eko
+cmd/eko/eko
+
+# ============================================================================
+# Test Files (not needed in production image)
+# Tests run in CI/CD, not in the container
+# ============================================================================
+*_test.go
+test/
+*.test
+coverage.out
+coverage.html
+coverage.txt
+test.test
+
+# ============================================================================
+# Development Files
+# IDE configurations and development tools
+# ============================================================================
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.cursor/
+.claude/
+*.swp
+*.swo
+*~
+.envrc
+
+# ============================================================================
+# Documentation (not needed in image)
+# Reduces build context size significantly
+# ============================================================================
+*.md
+README.md
+LICENSE
+CONTRIBUTING.md
+docs/
+PROJECT_STRUCTURE.md
+technical.md
+
+# ============================================================================
+# Configuration Files (mounted at runtime, not baked in)
+# Per user requirements: volume mounts for flexibility
+# ============================================================================
+configs/config.yaml
+.env
+*.env
+.env.*
+
+# ============================================================================
+# Reports and Logs (generated at runtime)
+# These directories are volume-mounted
+# ============================================================================
+reports/
+logs/
+*.log
+
+# ============================================================================
+# Custom Patterns (may contain sensitive data)
+# Patterns are mounted at runtime, not baked into image
+# Only default patterns are included in the image
+# ============================================================================
+patterns/custom/*.yaml
+patterns/custom/**/*.yaml
+
+# Keep the directory structure
+!patterns/custom/.gitkeep
+
+# ============================================================================
+# Docker Files (avoid recursion)
+# Don't include Docker files in the build context
+# ============================================================================
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# ============================================================================
+# CI/CD Files
+# Not needed in the container
+# ============================================================================
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+.circleci/
+
+# ============================================================================
+# OS Files
+# Operating system generated files
+# ============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.Trash-*
+
+# ============================================================================
+# Dependency Directories (go mod handles these)
+# Go modules are downloaded during build from go.mod/go.sum
+# ============================================================================
+vendor/
+
+# ============================================================================
+# Temporary Files
+# Temporary build or runtime artifacts
+# ============================================================================
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
