@@ -65,7 +65,8 @@ func main() {
 	}
 
 	if cfg.Proxy.OpenAI.Enabled {
-		logFields["openai_proxy"] = "POST http://localhost:8080/v1/chat/completions"
+		logFields["openai_chat_completions"] = "POST http://localhost:8080/v1/chat/completions"
+		logFields["openai_responses"] = "POST http://localhost:8080/v1/responses"
 	}
 
 	logger.Info("Ekō server starting", logFields)

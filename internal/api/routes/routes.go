@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SetupRoutes configures all API routes
 func SetupRoutes(
 	router *gin.Engine,
 	sanitizeHandler *handlers.SanitizeHandler,
@@ -29,9 +28,10 @@ func SetupRoutes(
 		// Sanitization endpoint
 		v1.POST("/sanitize", sanitizeHandler.Handle)
 
-		// OpenAI-compatible proxy endpoint
+		// OpenAI-compatible proxy endpoints
 		if openaiProxy != nil {
 			v1.POST("/chat/completions", openaiProxy.HandleChatCompletion)
+			v1.POST("/responses", openaiProxy.HandleResponse)
 		}
 
 		// TODO: Add metrics endpoint
