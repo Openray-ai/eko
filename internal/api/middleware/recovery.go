@@ -19,10 +19,10 @@ func Recovery() gin.HandlerFunc {
 
 				// Log the panic with full context
 				logger.Error("Panic recovered", logger.Fields{
-					"error":      fmt.Sprintf("%v", err),
-					"path":       c.Request.URL.Path,
-					"method":     c.Request.Method,
-					"client_ip":  c.ClientIP(),
+					"error":       fmt.Sprintf("%v", err),
+					"path":        c.Request.URL.Path,
+					"method":      c.Request.Method,
+					"client_ip":   c.ClientIP(),
 					"stack_trace": stack,
 				})
 

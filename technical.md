@@ -440,7 +440,7 @@ export OPENAI_BASE_URL="http://localhost:8080/v1/openai"
 export ANTHROPIC_BASE_URL="http://localhost:8080/v1/anthropic"
 ```
 
-That's it. Every API call now goes through Guardrail.
+That's it. Every API call now goes through Guardrail
 ````
 
 Want me to create separate detailed documentation for the proxy implementation, including request/response flow diagrams and provider-specific considerations?
