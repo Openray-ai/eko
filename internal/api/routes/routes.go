@@ -3,6 +3,7 @@ package routes
 import (
 	"eko/internal/api/handlers"
 	"eko/internal/api/middleware"
+	"eko/internal/proxy/openai"
 
 	"github.com/gin-gonic/gin"
 )
@@ -12,6 +13,7 @@ func SetupRoutes(
 	router *gin.Engine,
 	sanitizeHandler *handlers.SanitizeHandler,
 	healthHandler *handlers.HealthHandler,
+	openaiProxy *openai.Proxy,
 ) {
 	// Apply global middleware
 	router.Use(middleware.Logger())
@@ -27,12 +29,15 @@ func SetupRoutes(
 		// Sanitization endpoint
 		v1.POST("/sanitize", sanitizeHandler.Handle)
 
+		// OpenAI-compatible proxy endpoint
+		if openaiProxy != nil {
+			v1.POST("/chat/completions", openaiProxy.HandleChatCompletion)
+		}
+
 		// TODO: Add metrics endpoint
 		// TODO: Add patterns management endpoints
 	}
 
-	// Proxy endpoints will be added here
-	// TODO: /v1/openai/* routes
 	// TODO: /v1/anthropic/* routes
 	// TODO: /v1/google/* routes
 }

@@ -7,6 +7,7 @@ import (
 	"eko/internal/core/detector"
 	"eko/internal/core/sanitizer"
 	"eko/internal/helpers/logger"
+	"eko/internal/proxy/openai"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -37,7 +38,15 @@ func main() {
 	// Load default patterns
 	det.LoadDefaultPatterns()
 
-	// TODO: Initialize proxy handlers
+	// Initialize proxy handlers
+	var openaiProxy *openai.Proxy
+	if cfg.Proxy.OpenAI.Enabled {
+		openaiProxy = openai.New(san, cfg.Proxy.OpenAI.BaseURL, cfg.Proxy.OpenAI.Timeout)
+		logger.Info("OpenAI proxy initialized", logger.Fields{
+			"base_url": cfg.Proxy.OpenAI.BaseURL,
+			"timeout":  cfg.Proxy.OpenAI.Timeout,
+		})
+	}
 
 	// Initialize HTTP handlers
 	sanitizeHandler := handlers.NewSanitizeHandler(san)
@@ -45,15 +54,21 @@ func main() {
 
 	// Setup router
 	router := gin.New()
-	routes.SetupRoutes(router, sanitizeHandler, healthHandler)
+	routes.SetupRoutes(router, sanitizeHandler, healthHandler, openaiProxy)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
-	logger.Info("Ekō server starting", logger.Fields{
+	logFields := logger.Fields{
 		"address":           addr,
 		"health_endpoint":   "http://localhost:8080/health",
 		"sanitize_endpoint": "POST http://localhost:8080/v1/sanitize",
-	})
+	}
+
+	if cfg.Proxy.OpenAI.Enabled {
+		logFields["openai_proxy"] = "POST http://localhost:8080/v1/chat/completions"
+	}
+
+	logger.Info("Ekō server starting", logFields)
 
 	if err := router.Run(addr); err != nil {
 		logger.Fatal("Failed to start server", logger.Fields{
