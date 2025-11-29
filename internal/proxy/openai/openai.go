@@ -34,22 +34,22 @@ func New(s *sanitizer.Sanitizer, baseURL string, timeout int) *Proxy {
 
 // ChatCompletionRequest represents OpenAI chat completion request
 type ChatCompletionRequest struct {
-	Model            string                 `json:"model"`
-	Messages         []Message              `json:"messages"`
-	Stream           bool                   `json:"stream,omitempty"`
-	Temperature      *float64               `json:"temperature,omitempty"`
-	MaxTokens        *int                   `json:"max_tokens,omitempty"`
-	TopP             *float64               `json:"top_p,omitempty"`
-	FrequencyPenalty *float64               `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64               `json:"presence_penalty,omitempty"`
-	N                *int                   `json:"n,omitempty"`
-	Stop             interface{}            `json:"stop,omitempty"`
-	User             string                 `json:"user,omitempty"`
-	Tools            interface{}            `json:"tools,omitempty"`
-	ToolChoice       interface{}            `json:"tool_choice,omitempty"`
-	ResponseFormat   interface{}            `json:"response_format,omitempty"`
-	Seed             *int                   `json:"seed,omitempty"`
-	LogitBias        map[string]interface{} `json:"logit_bias,omitempty"`
+	Model            string         `json:"model"`
+	Messages         []Message      `json:"messages"`
+	Stream           bool           `json:"stream,omitempty"`
+	Temperature      *float64       `json:"temperature,omitempty"`
+	MaxTokens        *int           `json:"max_tokens,omitempty"`
+	TopP             *float64       `json:"top_p,omitempty"`
+	FrequencyPenalty *float64       `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64       `json:"presence_penalty,omitempty"`
+	N                *int           `json:"n,omitempty"`
+	Stop             any            `json:"stop,omitempty"`
+	User             string         `json:"user,omitempty"`
+	Tools            any            `json:"tools,omitempty"`
+	ToolChoice       any            `json:"tool_choice,omitempty"`
+	ResponseFormat   any            `json:"response_format,omitempty"`
+	Seed             *int           `json:"seed,omitempty"`
+	LogitBias        map[string]any `json:"logit_bias,omitempty"`
 }
 
 // Message represents a chat message
@@ -72,13 +72,13 @@ type CreateResponseRequest struct {
 	Temperature        *float64        `json:"temperature,omitempty"`
 	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
 	TopP               *float64        `json:"top_p,omitempty"`
-	Tools              interface{}     `json:"tools,omitempty"`
-	ToolChoice         interface{}     `json:"tool_choice,omitempty"`
+	Tools              any             `json:"tools,omitempty"`
+	ToolChoice         any             `json:"tool_choice,omitempty"`
 	ParallelToolCalls  *bool           `json:"parallel_tool_calls,omitempty"`
 	PreviousResponseID string          `json:"previous_response_id,omitempty"`
 	Instructions       string          `json:"instructions,omitempty"`
 	Store              *bool           `json:"store,omitempty"`
-	Metadata           interface{}     `json:"metadata,omitempty"`
+	Metadata           any             `json:"metadata,omitempty"`
 	User               string          `json:"user,omitempty"`
 }
 
@@ -113,19 +113,8 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 			"error": err.Error(),
 		})
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"message": "Invalid request format",
-				"type":    "invalid_request_error",
-			},
-		})
-		return
-	}
-
-	// Check for streaming (not supported yet)
-	if req.Stream {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": map[string]interface{}{
-				"message": "Streaming is not supported",
 				"type":    "invalid_request_error",
 			},
 		})
@@ -136,6 +125,7 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 	logger.Info("Processing OpenAI chat completion request", logger.Fields{
 		"model":         req.Model,
 		"message_count": len(req.Messages),
+		"streaming":     req.Stream,
 	})
 
 	// Sanitize messages
@@ -145,7 +135,7 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 			"error": err.Error(),
 		})
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"message": "Failed to sanitize request",
 				"type":    "internal_error",
 			},
@@ -153,45 +143,85 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 		return
 	}
 
-	logger.Info("Sanitization result", logger.Fields{
-		"sanitized_messages": sanitizationResult.SanitizedMessages,
-		"all_violations":     sanitizationResult.AllViolations,
-		"total_redacted":     sanitizationResult.TotalRedacted,
-	})
-
 	// Replace original messages with sanitized ones
 	req.Messages = sanitizationResult.SanitizedMessages
 
-	// Forward request to OpenAI
-	response, statusCode, err := p.forwardToOpenAI(c, &req)
-	if err != nil {
-		logger.Error("Failed to forward request to OpenAI", logger.Fields{
-			"error": err.Error(),
+	// Handle streaming vs non-streaming
+	if req.Stream {
+		// === STREAMING MODE ===
+		setupSSEHeaders(c)
+
+		// Send violation event first if violations found
+		if err := sendViolationSSEEvent(c, sanitizationResult.AllViolations, sanitizationResult.TotalRedacted); err != nil {
+			logger.Error("Failed to send violation event", logger.Fields{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// Forward request to OpenAI (streaming)
+		resp, err := p.forwardToOpenAIStream(c, &req)
+		if err != nil {
+			logger.Error("Failed to forward streaming request to OpenAI", logger.Fields{
+				"error": err.Error(),
+			})
+			// Can't send JSON error after SSE headers, send as SSE error event
+			fmt.Fprintf(c.Writer, "data: {\"error\":\"Failed to communicate with OpenAI\"}\n\n")
+			c.Writer.Flush()
+			return
+		}
+		defer resp.Body.Close()
+
+		// Stream response to client
+		if err := streamResponseToClient(c, resp); err != nil {
+			logger.Error("Failed to stream response", logger.Fields{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// Calculate total processing time
+		processingTime := time.Since(startTime).Milliseconds()
+
+		logger.Info("OpenAI streaming request processed successfully", logger.Fields{
+			"status_code":      resp.StatusCode,
+			"violations_found": len(sanitizationResult.AllViolations),
+			"redacted_count":   sanitizationResult.TotalRedacted,
+			"processing_ms":    processingTime,
 		})
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": map[string]interface{}{
-				"message": "Failed to communicate with OpenAI",
-				"type":    "proxy_error",
-			},
+	} else {
+		// === NON-STREAMING MODE ===
+		// Forward request to OpenAI
+		response, statusCode, err := p.forwardToOpenAI(c, &req)
+		if err != nil {
+			logger.Error("Failed to forward request to OpenAI", logger.Fields{
+				"error": err.Error(),
+			})
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": map[string]any{
+					"message": "Failed to communicate with OpenAI",
+					"type":    "proxy_error",
+				},
+			})
+			return
+		}
+
+		// Add violation headers
+		p.addViolationHeaders(c, sanitizationResult)
+
+		// Calculate total processing time
+		processingTime := time.Since(startTime).Milliseconds()
+
+		logger.Info("OpenAI request processed successfully", logger.Fields{
+			"status_code":      statusCode,
+			"violations_found": len(sanitizationResult.AllViolations),
+			"redacted_count":   sanitizationResult.TotalRedacted,
+			"processing_ms":    processingTime,
 		})
-		return
+
+		// Return OpenAI response
+		c.Data(statusCode, "application/json", response)
 	}
-
-	// Add violation headers
-	p.addViolationHeaders(c, sanitizationResult)
-
-	// Calculate total processing time
-	processingTime := time.Since(startTime).Milliseconds()
-
-	logger.Info("OpenAI request processed successfully", logger.Fields{
-		"status_code":      statusCode,
-		"violations_found": len(sanitizationResult.AllViolations),
-		"redacted_count":   sanitizationResult.TotalRedacted,
-		"processing_ms":    processingTime,
-	})
-
-	// Return OpenAI response
-	c.Data(statusCode, "application/json", response)
 }
 
 // sanitizeMessages sanitizes all text content in messages
@@ -315,19 +345,8 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 			"error": err.Error(),
 		})
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"message": "Invalid request format",
-				"type":    "invalid_request_error",
-			},
-		})
-		return
-	}
-
-	// Check for streaming (not supported yet)
-	if req.Stream {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": map[string]interface{}{
-				"message": "Streaming is not supported",
 				"type":    "invalid_request_error",
 			},
 		})
@@ -336,7 +355,8 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 
 	// Log incoming request
 	logger.Info("Processing OpenAI Responses API request", logger.Fields{
-		"model": req.Model,
+		"model":     req.Model,
+		"streaming": req.Stream,
 	})
 
 	// Sanitize input
@@ -346,7 +366,7 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 			"error": err.Error(),
 		})
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"message": "Failed to sanitize request",
 				"type":    "internal_error",
 			},
@@ -357,6 +377,49 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 	// Replace original input with sanitized version
 	req.Input = sanitizationResult.SanitizedInput
 
+	// Handle streaming vs non-streaming
+	if req.Stream {
+		setupSSEHeaders(c)
+
+		if err := sendViolationSSEEvent(c, sanitizationResult.AllViolations, sanitizationResult.TotalRedacted); err != nil {
+			logger.Error("Failed to send violation event", logger.Fields{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// Forward request to OpenAI (streaming)
+		resp, err := p.forwardResponseToOpenAIStream(c, &req)
+		if err != nil {
+			logger.Error("Failed to forward streaming request to OpenAI", logger.Fields{
+				"error": err.Error(),
+			})
+			// Can't send JSON error after SSE headers, send as SSE error event
+			fmt.Fprintf(c.Writer, "data: {\"error\":\"Failed to communicate with OpenAI\"}\n\n")
+			c.Writer.Flush()
+			return
+		}
+		defer resp.Body.Close()
+
+		// Stream response to client
+		if err := streamResponseToClient(c, resp); err != nil {
+			logger.Error("Failed to stream response", logger.Fields{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// Calculate total processing time
+		processingTime := time.Since(startTime).Milliseconds()
+
+		logger.Info("OpenAI Responses streaming request processed successfully", logger.Fields{
+			"status_code":      resp.StatusCode,
+			"violations_found": len(sanitizationResult.AllViolations),
+			"redacted_count":   sanitizationResult.TotalRedacted,
+			"processing_ms":    processingTime,
+		})
+	}
+
 	// Forward request to OpenAI
 	response, statusCode, err := p.forwardResponseToOpenAI(c, &req)
 	if err != nil {
@@ -364,7 +427,7 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 			"error": err.Error(),
 		})
 		c.JSON(http.StatusBadGateway, gin.H{
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"message": "Failed to communicate with OpenAI",
 				"type":    "proxy_error",
 			},
@@ -387,6 +450,7 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 
 	// Return OpenAI response
 	c.Data(statusCode, "application/json", response)
+
 }
 
 // sanitizeResponseInput sanitizes the input field (string or array)
@@ -501,4 +565,147 @@ func (p *Proxy) forwardResponseToOpenAI(c *gin.Context, req *CreateResponseReque
 	}
 
 	return respBody, resp.StatusCode, nil
+}
+
+// ============================================================================
+// Streaming Support
+// ============================================================================
+
+// setupSSEHeaders sets up Server-Sent Events headers for streaming responses
+func setupSSEHeaders(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+}
+
+// ViolationEvent represents the violation information sent as initial SSE event
+type ViolationEvent struct {
+	Type            string               `json:"type"`
+	ViolationsFound int                  `json:"violations_found"`
+	RedactedCount   int                  `json:"redacted_count"`
+	Summary         string               `json:"summary"`
+	Details         []detector.Violation `json:"details,omitempty"`
+}
+
+// sendViolationSSEEvent sends violation information as the first SSE event
+func sendViolationSSEEvent(c *gin.Context, violations []detector.Violation, redactedCount int) error {
+	if len(violations) == 0 {
+		return nil // No violations, skip event
+	}
+
+	// Build summary string
+	violationTypes := make(map[string]int)
+	for _, v := range violations {
+		violationTypes[v.Type]++
+	}
+
+	var summaryParts []string
+	for vType, count := range violationTypes {
+		summaryParts = append(summaryParts, fmt.Sprintf("%s:%d", vType, count))
+	}
+
+	// Create violation event
+	event := ViolationEvent{
+		Type:            "eko.violation_report",
+		ViolationsFound: len(violations),
+		RedactedCount:   redactedCount,
+		Summary:         strings.Join(summaryParts, ","),
+		Details:         violations,
+	}
+
+	// Marshal to JSON
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal violation event: %w", err)
+	}
+
+	// Send as SSE event
+	_, err = fmt.Fprintf(c.Writer, "data: %s\n\n", string(eventJSON))
+	if err != nil {
+		return fmt.Errorf("failed to write violation event: %w", err)
+	}
+
+	// Flush immediately
+	c.Writer.Flush()
+
+	logger.Info("Sent violation SSE event", logger.Fields{
+		"violations_found": len(violations),
+		"redacted_count":   redactedCount,
+	})
+
+	return nil
+}
+
+// streamResponseToClient streams the HTTP response body to the client using io.Copy
+func streamResponseToClient(c *gin.Context, resp *http.Response) error {
+	// Copy response body to client (pass-through streaming)
+	_, err := io.Copy(c.Writer, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to stream response: %w", err)
+	}
+
+	return nil
+}
+
+// forwardToOpenAIStream forwards the request to OpenAI and returns the response for streaming
+// Caller is responsible for closing response body
+func (p *Proxy) forwardToOpenAIStream(c *gin.Context, req *ChatCompletionRequest) (*http.Response, error) {
+	// Marshal request to JSON
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	openaiURL := fmt.Sprintf("%s/chat/completions", p.GetBaseURL())
+	httpReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", openaiURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Copy relevant headers from original request
+	if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+		httpReq.Header.Set("Authorization", authHeader)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Forward request
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+
+	return resp, nil
+}
+
+// forwardResponseToOpenAIStream forwards the request to OpenAI Responses API and returns the response for streaming
+// Caller is responsible for closing response body
+func (p *Proxy) forwardResponseToOpenAIStream(c *gin.Context, req *CreateResponseRequest) (*http.Response, error) {
+	// Marshal request to JSON
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	openaiURL := fmt.Sprintf("%s/responses", p.GetBaseURL())
+	httpReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", openaiURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Copy relevant headers from original request
+	if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+		httpReq.Header.Set("Authorization", authHeader)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Forward request
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+
+	return resp, nil
 }

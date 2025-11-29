@@ -1,12 +1,14 @@
 package test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,6 +276,208 @@ func TestResponsesProxyWithArrayInput(t *testing.T) {
 
 	t.Logf("Array input test - Violations Found: %s, Redacted: %s, Summary: %s",
 		violationsFound, redactedCount, violationSummary)
+}
+
+func TestChatCompletionsProxyStreaming(t *testing.T) {
+	if os.Getenv("EKO_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test. Set EKO_INTEGRATION_TEST=true to run")
+	}
+
+	tests := []struct {
+		name             string
+		message          string
+		expectViolations bool
+	}{
+		{
+			name:             "Streaming with email violation",
+			message:          "My email is user@example.com. What's the weather?",
+			expectViolations: true,
+		},
+		{
+			name:             "Streaming with credential violation",
+			message:          "Connect to postgres://admin:secret@localhost:5432/db",
+			expectViolations: true,
+		},
+		{
+			name:             "Streaming with no violations",
+			message:          "Tell me a joke about programming",
+			expectViolations: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := map[string]interface{}{
+				"model": "gpt-4o",
+				"messages": []map[string]interface{}{
+					{
+						"role":    "user",
+						"content": tt.message,
+					},
+				},
+				"stream": true,
+			}
+			bodyBytes, err := json.Marshal(reqBody)
+			if err != nil {
+				t.Fatalf("Failed to marshal request: %v", err)
+			}
+
+			req, err := http.NewRequest("POST", testServerURL+"/chat/completions", bytes.NewReader(bodyBytes))
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
+			client := &http.Client{Timeout: testTimeout}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			// Verify SSE headers
+			contentType := resp.Header.Get("Content-Type")
+			if !strings.Contains(contentType, "text/event-stream") {
+				t.Errorf("Expected SSE content type, got: %s", contentType)
+			}
+
+			// Read SSE stream
+			scanner := bufio.NewScanner(resp.Body)
+			foundViolationEvent := false
+			eventCount := 0
+
+			for scanner.Scan() {
+				line := scanner.Text()
+				if !strings.HasPrefix(line, "data: ") {
+					continue
+				}
+
+				data := strings.TrimPrefix(line, "data: ")
+				if data == "[DONE]" {
+					break
+				}
+
+				eventCount++
+				var event map[string]interface{}
+				if err := json.Unmarshal([]byte(data), &event); err != nil {
+					// Log but don't fail - might be error event from OpenAI
+					t.Logf("Failed to parse event: %v", err)
+					continue
+				}
+
+				if eventCount == 1 {
+					// Check if first event is violation event
+					if eventType, ok := event["type"].(string); ok && eventType == "eko.violation" {
+						foundViolationEvent = true
+						t.Logf("First event is violation event: %+v", event)
+					}
+				}
+			}
+
+			if tt.expectViolations && !foundViolationEvent {
+				t.Error("Expected violation event as first SSE event, but not found")
+			} else if !tt.expectViolations && foundViolationEvent {
+				t.Error("Did not expect violation event, but found one")
+			}
+
+			t.Logf("Processed %d SSE events", eventCount)
+		})
+	}
+}
+
+func TestResponsesProxyStreaming(t *testing.T) {
+	if os.Getenv("EKO_INTEGRATION_TEST") != "true" {
+		t.Skip("Skipping integration test. Set EKO_INTEGRATION_TEST=true to run")
+	}
+
+	tests := []struct {
+		name             string
+		input            string
+		expectViolations bool
+	}{
+		{
+			name:             "Streaming responses with PII violation",
+			input:            "My contact is admin@company.com and phone 555-1234",
+			expectViolations: true,
+		},
+		{
+			name:             "Streaming responses with clean input",
+			input:            "What is the capital of France?",
+			expectViolations: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := map[string]interface{}{
+				"model": "gpt-4.1",
+				"input": tt.input,
+			}
+			bodyBytes, err := json.Marshal(reqBody)
+			if err != nil {
+				t.Fatalf("Failed to marshal request: %v", err)
+			}
+
+			req, err := http.NewRequest("POST", testServerURL+"/responses", bytes.NewReader(bodyBytes))
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
+			client := &http.Client{Timeout: testTimeout}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			// Verify SSE headers
+			contentType := resp.Header.Get("Content-Type")
+			if !strings.Contains(contentType, "text/event-stream") {
+				t.Errorf("Expected SSE content type, got: %s", contentType)
+			}
+
+			// Read SSE stream
+			scanner := bufio.NewScanner(resp.Body)
+			foundViolationEvent := false
+			eventCount := 0
+
+			for scanner.Scan() {
+				line := scanner.Text()
+				if !strings.HasPrefix(line, "data: ") {
+					continue
+				}
+
+				data := strings.TrimPrefix(line, "data: ")
+				eventCount++
+
+				var event map[string]interface{}
+				if err := json.Unmarshal([]byte(data), &event); err != nil {
+					// Log but don't fail - might be different event format
+					t.Logf("Failed to parse event: %v", err)
+					continue
+				}
+
+				if eventCount == 1 {
+					// Check if first event is violation event
+					if eventType, ok := event["type"].(string); ok && eventType == "eko.violation" {
+						foundViolationEvent = true
+						t.Logf("First event is violation event: %+v", event)
+					}
+				}
+			}
+
+			if tt.expectViolations && !foundViolationEvent {
+				t.Error("Expected violation event as first SSE event, but not found")
+			} else if !tt.expectViolations && foundViolationEvent {
+				t.Error("Did not expect violation event, but found one")
+			}
+
+			t.Logf("Processed %d SSE events", eventCount)
+		})
+	}
 }
 
 type headerCaptureTransport struct {
