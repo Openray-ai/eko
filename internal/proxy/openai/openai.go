@@ -65,14 +65,9 @@ type SanitizationResult struct {
 	TotalRedacted     int
 }
 
-// ============================================================================
-// Responses API Types
-// ============================================================================
-
-// CreateResponseRequest represents OpenAI Responses API request
 type CreateResponseRequest struct {
 	Model              string          `json:"model"`
-	Input              json.RawMessage `json:"input"` // Can be string or array of ResponseMessage
+	Input              json.RawMessage `json:"input"`
 	Stream             bool            `json:"stream,omitempty"`
 	Temperature        *float64        `json:"temperature,omitempty"`
 	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
@@ -311,15 +306,9 @@ func (p *Proxy) addResponseViolationHeaders(c *gin.Context, result *ResponseSani
 	}
 }
 
-// ============================================================================
-// Responses API Handlers
-// ============================================================================
-
-// HandleResponse processes OpenAI Responses API requests with sanitization
 func (p *Proxy) HandleResponse(c *gin.Context) {
 	startTime := time.Now()
 
-	// Parse incoming request
 	var req CreateResponseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Error("Failed to parse OpenAI Responses request", logger.Fields{
