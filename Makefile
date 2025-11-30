@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration test-all clean install lint fmt help
+.PHONY: build run test test-integration test-all clean install lint fmt help docker-build docker-run docker-up docker-down docker-logs docker-test docker-push docker-clean
 
 # Binary name
 BINARY_NAME=eko
@@ -78,15 +78,59 @@ build-all:
 	@GOOS=windows GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./cmd/eko
 	@echo "Multi-platform build complete"
 
-# Docker build
+# Docker build (with BuildKit for better caching and performance)
 docker-build:
 	@echo "Building Docker image..."
-	@docker build -t openray/eko:latest .
+	@DOCKER_BUILDKIT=1 docker build -t openray/eko:latest .
+	@echo "Docker image built: openray/eko:latest"
 
-# Docker run
+# Docker run (with volume mounts for config, patterns, and reports)
 docker-run:
 	@echo "Running Docker container..."
-	@docker run -p 8080:8080 openray/eko:latest
+	@docker run --rm \
+		-p 8080:8080 \
+		-v $(PWD)/configs/config.yaml:/app/configs/config.yaml:ro \
+		-v $(PWD)/patterns/custom:/app/patterns/custom:ro \
+		-v $(PWD)/reports:/app/reports:rw \
+		openray/eko:latest
+
+# Start services with docker-compose
+docker-up:
+	@echo "Starting services with docker-compose..."
+	@docker compose up -d
+	@echo "Services started. Use 'make docker-logs' to view logs"
+
+# Stop docker-compose services
+docker-down:
+	@echo "Stopping services..."
+	@docker compose down
+
+# View docker-compose logs
+docker-logs:
+	@docker compose logs -f eko
+
+# Test Docker setup (build and verify)
+docker-test:
+	@echo "Testing Docker setup..."
+	@echo "1. Building image..."
+	@$(MAKE) docker-build
+	@echo "2. Checking image size..."
+	@docker images openray/eko:latest --format "{{.Size}}"
+	@echo "3. Verifying image was built successfully"
+	@docker images openray/eko:latest
+	@echo "Docker test complete. Run 'make docker-up' to start the service"
+
+# Push to Docker registry
+docker-push:
+	@echo "Pushing to Docker registry..."
+	@docker push openray/eko:latest
+
+# Clean Docker artifacts (remove images and containers)
+docker-clean:
+	@echo "Cleaning Docker artifacts..."
+	@docker compose down -v 2>/dev/null || true
+	@docker rmi openray/eko:latest 2>/dev/null || true
+	@echo "Docker cleanup complete"
 
 # Help
 help:
@@ -103,6 +147,15 @@ help:
 	@echo "  lint             - Run linters"
 	@echo "  fmt              - Format code"
 	@echo "  build-all        - Build for multiple platforms"
-	@echo "  docker-build     - Build Docker image"
-	@echo "  docker-run       - Run Docker container"
+	@echo ""
+	@echo "Docker targets:"
+	@echo "  docker-build     - Build Docker image with BuildKit"
+	@echo "  docker-run       - Run Docker container with volume mounts"
+	@echo "  docker-up        - Start services with docker-compose"
+	@echo "  docker-down      - Stop docker-compose services"
+	@echo "  docker-logs      - View docker-compose logs"
+	@echo "  docker-test      - Test Docker setup (build and verify)"
+	@echo "  docker-push      - Push image to Docker registry"
+	@echo "  docker-clean     - Remove Docker images and containers"
+	@echo ""
 	@echo "  help             - Show this help message"

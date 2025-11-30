@@ -53,3 +53,7 @@ dist/
 build/
 bin/
 .claude/
+
+# GCP deployment files
+gcp/*.json
+github-actions-key.json
