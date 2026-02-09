@@ -795,7 +795,7 @@ func sendViolationSSEEvent(c *gin.Context, violations []detector.Violation, reda
 
 	// Create violation event
 	event := ViolationEvent{
-		Type:            "eko.violation_report",
+		Type:            "eko.violation",
 		ViolationsFound: len(violations),
 		RedactedCount:   redactedCount,
 		Summary:         strings.Join(summaryParts, ","),
