@@ -161,7 +161,7 @@ curl -X POST http://localhost:8080/v1/sanitize \
 **Response:**
 ```json
 {
-  "sanitized_prompt": "My BVN is [REDACTED_BVN] and email is [REDACTED_EMAIL]",
+  "sanitized_prompt": "My BVN is 00000000001 and email is user_aaa@example.com",
   "violations": [
     {
       "type": "pii",
@@ -179,9 +179,34 @@ curl -X POST http://localhost:8080/v1/sanitize \
     }
   ],
   "safe": false,
-  "processing_time_ms": 2.1
+  "processing_time_ms": 2.1,
+  "redacted_count": 0,
+  "tokenized_count": 2,
+  "session_id": "eko_123e4567-e89b-12d3-a456-426614174000"
 }
 ```
+
+To reuse tokens across requests, pass the same `session_id` back:
+```bash
+curl -X POST http://localhost:8080/v1/sanitize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "My BVN is 12345678901 and email is john@company.com",
+    "session_id": "eko_123e4567-e89b-12d3-a456-426614174000"
+  }'
+```
+
+Note: credentials (e.g. database connection strings, cloud keys) are always redacted, even in tokenization mode.
+
+### Redact vs Tokenize
+Ekō supports two sanitization modes:
+- `redact`: Replace matched data with labels like `[REDACTED_EMAIL]`. This is the default.
+- `tokenize`: Replace matched data with **stable, reversible tokens** within a session (for supported PII/financial patterns). The response includes `session_id` so you can reuse the same tokens in subsequent requests.
+
+Behavior details:
+- `/v1/sanitize` returns `session_id` and uses session-aware sanitization. If you don’t provide one, Ekō generates it.
+- **Credentials are never tokenized** (API keys, DB connection strings, cloud keys, etc.); they are always redacted.
+- `LOG` severity patterns are **not** modified in either mode.
 
 ---
 
@@ -239,6 +264,8 @@ proxy:
     on_violation: "sanitize"  # Options: block, sanitize, warn
     log_requests: true
     add_violation_headers: true
+    sanitization_mode: "tokenize"  # Options: redact, tokenize
+    token_ttl_ms: 30000            # Token vault TTL in ms (tokenize mode only)
 
 # Pattern management
 patterns:

@@ -30,7 +30,7 @@ proxy:
     on_violation: "sanitize"  # Options: block, sanitize, warn
     log_requests: true
     add_violation_headers: true
-    sanitization_mode: "redact"  # Options: redact, tokenize
+    sanitization_mode: "tokenize"  # Options: redact, tokenize
     token_ttl_ms: 30000          # Token vault TTL in ms (tokenize mode only)
 
 # Pattern management
