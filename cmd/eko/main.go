@@ -6,9 +6,11 @@ import (
 	"eko/internal/config"
 	"eko/internal/core/detector"
 	"eko/internal/core/sanitizer"
+	"eko/internal/core/tokenizer"
 	"eko/internal/helpers/logger"
 	"eko/internal/proxy/openai"
 	"fmt"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -31,30 +33,22 @@ func main() {
 		"log_format": cfg.Logging.Format,
 	})
 
+	logger.Info("Sanitization mode configured", logger.Fields{
+		"mode": cfg.Proxy.Behavior.SanitizationMode,
+	})
+
 	// Initialize core components
 	det := detector.New()
-	san := sanitizer.New(det)
+	san, resolver := buildSanitizer(cfg, det)
 
 	// Load default patterns
 	det.LoadDefaultPatterns()
 
 	// Initialize proxy handlers
-	var openaiProxy *openai.Proxy
-	if cfg.Proxy.OpenAI.Enabled {
-		openaiProxy = openai.New(san, cfg.Proxy.OpenAI.BaseURL, cfg.Proxy.OpenAI.Timeout)
-		logger.Info("OpenAI proxy initialized", logger.Fields{
-			"base_url": cfg.Proxy.OpenAI.BaseURL,
-			"timeout":  cfg.Proxy.OpenAI.Timeout,
-		})
-	}
+	openaiProxy := buildOpenAIProxy(cfg, san, resolver)
 
 	// Initialize HTTP handlers
-	sanitizeHandler := handlers.NewSanitizeHandler(san)
-	healthHandler := handlers.NewHealthHandler()
-
-	// Setup router
-	router := gin.New()
-	routes.SetupRoutes(router, sanitizeHandler, healthHandler, openaiProxy)
+	router := buildRouter(san, openaiProxy)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
@@ -76,4 +70,38 @@ func main() {
 			"error": err.Error(),
 		})
 	}
+}
+
+func buildSanitizer(cfg *config.Config, det *detector.Detector) (*sanitizer.Sanitizer, *tokenizer.Resolver) {
+	mode := cfg.Proxy.Behavior.SanitizationMode
+	if mode == "tokenize" {
+		vaultManager := tokenizer.NewVaultManager(time.Duration(cfg.Proxy.Behavior.TokenTTLms) * time.Millisecond)
+		tok := tokenizer.NewTokenizer()
+		resolver := tokenizer.NewResolver(vaultManager)
+		return sanitizer.NewWithTokenizer(det, tok, vaultManager, mode), resolver
+	}
+
+	return sanitizer.New(det), nil
+}
+
+func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *tokenizer.Resolver) *openai.Proxy {
+	if !cfg.Proxy.OpenAI.Enabled {
+		return nil
+	}
+
+	openaiProxy := openai.NewWithResolver(san, resolver, cfg.Proxy.OpenAI.BaseURL, cfg.Proxy.OpenAI.Timeout)
+	logger.Info("OpenAI proxy initialized", logger.Fields{
+		"base_url": cfg.Proxy.OpenAI.BaseURL,
+		"timeout":  cfg.Proxy.OpenAI.Timeout,
+	})
+	return openaiProxy
+}
+
+func buildRouter(san *sanitizer.Sanitizer, openaiProxy *openai.Proxy) *gin.Engine {
+	sanitizeHandler := handlers.NewSanitizeHandler(san)
+	healthHandler := handlers.NewHealthHandler()
+
+	router := gin.New()
+	routes.SetupRoutes(router, sanitizeHandler, healthHandler, openaiProxy)
+	return router
 }

@@ -72,7 +72,7 @@ func (vm *VaultManager) Get(sessionID string) (*Vault, error) {
 
 	if vault.isExpired(now) {
 		delete(vm.vaults, sessionID)
-		return nil, ErrVaultNotFound
+		return nil, ErrSessionExpired
 	}
 
 	vault.refresh(now, vm.ttl)

@@ -28,6 +28,16 @@ func TestErrors(t *testing.T) {
 			err:     ErrInvalidSessionID,
 			message: "invalid session id",
 		},
+		{
+			name:    "token length exceeded",
+			err:     ErrTokenLengthExceeded,
+			message: "token length exceeded",
+		},
+		{
+			name:    "credential tokenization not allowed",
+			err:     ErrCredentialTokenization,
+			message: "credential tokenization not allowed",
+		},
 	}
 
 	for _, tt := range tests {
