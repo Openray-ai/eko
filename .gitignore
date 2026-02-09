@@ -57,3 +57,5 @@ bin/
 # GCP deployment files
 gcp/*.json
 github-actions-key.json
+
+assessments/
