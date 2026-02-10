@@ -62,6 +62,11 @@ func (t *Tokenizer) Generate(v detector.Violation, vault *Vault) (string, error)
 			continue
 		}
 
+		if vault.maxTokens > 0 && len(vault.tokens.forward) >= vault.maxTokens {
+			vault.mu.Unlock()
+			return "", ErrVaultFull
+		}
+
 		wait := make(chan struct{})
 		vault.inflight[v.Matched] = wait
 		vault.mu.Unlock()
@@ -81,6 +86,12 @@ func (t *Tokenizer) Generate(v detector.Violation, vault *Vault) (string, error)
 			close(wait)
 			vault.mu.Unlock()
 			return existing, nil
+		}
+		if vault.maxTokens > 0 && len(vault.tokens.forward) >= vault.maxTokens {
+			delete(vault.inflight, v.Matched)
+			close(wait)
+			vault.mu.Unlock()
+			return "", ErrVaultFull
 		}
 		vault.tokens.forward[v.Matched] = token
 		vault.tokens.reverse[token] = v.Matched

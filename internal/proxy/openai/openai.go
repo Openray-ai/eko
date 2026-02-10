@@ -255,31 +255,54 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 	}
 }
 
+type sanitizeTextFunc func(text string) (string, []detector.Violation, int, int, error)
+
 // sanitizeMessages sanitizes all text content in messages
 func (p *Proxy) sanitizeMessages(messages []Message, sessionID string) (*SanitizationResult, error) {
+	return p.sanitizeMessagesWith(messages, func(text string) (string, []detector.Violation, int, int, error) {
+		result, err := p.GetSanitizer().SanitizeWithSession(text, sessionID)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+
+		return result.SanitizedPrompt, result.Violations, result.RedactedCount, result.TokenizedCount, nil
+	}, true)
+}
+
+func (p *Proxy) sanitizeMessagesRedact(messages []Message) (*SanitizationResult, error) {
+	return p.sanitizeMessagesWith(messages, func(text string) (string, []detector.Violation, int, int, error) {
+		result, err := p.GetSanitizer().Sanitize(text)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+
+		return result.SanitizedPrompt, result.Violations, result.RedactedCount, 0, nil
+	}, false)
+}
+
+func (p *Proxy) sanitizeMessagesWith(messages []Message, sanitize sanitizeTextFunc, includeTokenized bool) (*SanitizationResult, error) {
 	sanitizedMessages := make([]Message, len(messages))
 	allViolations := []detector.Violation{}
 	totalRedacted := 0
 	totalTokenized := 0
 
 	for i, msg := range messages {
-		// Sanitize the content
-		result, err := p.GetSanitizer().SanitizeWithSession(msg.Content, sessionID)
+		sanitizedText, violations, redactedCount, tokenizedCount, err := sanitize(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("failed to sanitize message %d: %w", i, err)
 		}
 
-		// Create sanitized message
 		sanitizedMessages[i] = Message{
 			Role:    msg.Role,
-			Content: result.SanitizedPrompt,
+			Content: sanitizedText,
 		}
 
-		// Collect violations
-		if len(result.Violations) > 0 {
-			allViolations = append(allViolations, result.Violations...)
-			totalRedacted += result.RedactedCount
-			totalTokenized += result.TokenizedCount
+		if len(violations) > 0 {
+			allViolations = append(allViolations, violations...)
+			totalRedacted += redactedCount
+			if includeTokenized {
+				totalTokenized += tokenizedCount
+			}
 		}
 	}
 
@@ -288,36 +311,6 @@ func (p *Proxy) sanitizeMessages(messages []Message, sessionID string) (*Sanitiz
 		AllViolations:     allViolations,
 		TotalRedacted:     totalRedacted,
 		TotalTokenized:    totalTokenized,
-	}, nil
-}
-
-func (p *Proxy) sanitizeMessagesRedact(messages []Message) (*SanitizationResult, error) {
-	sanitizedMessages := make([]Message, len(messages))
-	allViolations := []detector.Violation{}
-	totalRedacted := 0
-
-	for i, msg := range messages {
-		result, err := p.GetSanitizer().Sanitize(msg.Content)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sanitize message %d: %w", i, err)
-		}
-
-		sanitizedMessages[i] = Message{
-			Role:    msg.Role,
-			Content: result.SanitizedPrompt,
-		}
-
-		if len(result.Violations) > 0 {
-			allViolations = append(allViolations, result.Violations...)
-			totalRedacted += result.RedactedCount
-		}
-	}
-
-	return &SanitizationResult{
-		SanitizedMessages: sanitizedMessages,
-		AllViolations:     allViolations,
-		TotalRedacted:     totalRedacted,
-		TotalTokenized:    0,
 	}, nil
 }
 
@@ -593,28 +586,48 @@ func (p *Proxy) ensureSessionID(c *gin.Context) string {
 
 // sanitizeResponseInput sanitizes the input field (string or array)
 func (p *Proxy) sanitizeResponseInput(inputRaw json.RawMessage, sessionID string) (*ResponseSanitizationResult, error) {
+	return p.sanitizeResponseInputWith(inputRaw, func(text string) (string, []detector.Violation, int, int, error) {
+		result, err := p.GetSanitizer().SanitizeWithSession(text, sessionID)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+
+		return result.SanitizedPrompt, result.Violations, result.RedactedCount, result.TokenizedCount, nil
+	}, true)
+}
+
+func (p *Proxy) sanitizeResponseInputRedact(inputRaw json.RawMessage) (*ResponseSanitizationResult, error) {
+	return p.sanitizeResponseInputWith(inputRaw, func(text string) (string, []detector.Violation, int, int, error) {
+		result, err := p.GetSanitizer().Sanitize(text)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+
+		return result.SanitizedPrompt, result.Violations, result.RedactedCount, 0, nil
+	}, false)
+}
+
+func (p *Proxy) sanitizeResponseInputWith(inputRaw json.RawMessage, sanitize sanitizeTextFunc, includeTokenized bool) (*ResponseSanitizationResult, error) {
 	allViolations := []detector.Violation{}
 	totalRedacted := 0
 	totalTokenized := 0
 
-	// Try to parse as string first
 	var inputStr string
 	if err := json.Unmarshal(inputRaw, &inputStr); err == nil {
-		// Input is a simple string
-		result, err := p.GetSanitizer().SanitizeWithSession(inputStr, sessionID)
+		sanitizedText, violations, redactedCount, tokenizedCount, err := sanitize(inputStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to sanitize string input: %w", err)
 		}
 
-		// Collect violations
-		if len(result.Violations) > 0 {
-			allViolations = append(allViolations, result.Violations...)
-			totalRedacted += result.RedactedCount
-			totalTokenized += result.TokenizedCount
+		if len(violations) > 0 {
+			allViolations = append(allViolations, violations...)
+			totalRedacted += redactedCount
+			if includeTokenized {
+				totalTokenized += tokenizedCount
+			}
 		}
 
-		// Re-marshal sanitized string
-		sanitizedInput, err := json.Marshal(result.SanitizedPrompt)
+		sanitizedInput, err := json.Marshal(sanitizedText)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal sanitized input: %w", err)
 		}
@@ -627,39 +640,34 @@ func (p *Proxy) sanitizeResponseInput(inputRaw json.RawMessage, sessionID string
 		}, nil
 	}
 
-	// Try to parse as array of ResponseMessage
 	var messages []ResponseMessage
 	if err := json.Unmarshal(inputRaw, &messages); err != nil {
 		return nil, fmt.Errorf("input must be either a string or array of messages: %w", err)
 	}
 
-	// Sanitize all input_text content blocks in messages
 	for i := range messages {
 		for j := range messages[i].Content {
 			contentBlock := &messages[i].Content[j]
 
-			// Only sanitize input_text content blocks
 			if contentBlock.Type == "input_text" && contentBlock.Text != "" {
-				result, err := p.GetSanitizer().SanitizeWithSession(contentBlock.Text, sessionID)
+				sanitizedText, violations, redactedCount, tokenizedCount, err := sanitize(contentBlock.Text)
 				if err != nil {
 					return nil, fmt.Errorf("failed to sanitize content block: %w", err)
 				}
 
-				// Replace with sanitized text
-				contentBlock.Text = result.SanitizedPrompt
+				contentBlock.Text = sanitizedText
 
-				// Collect violations
-				if len(result.Violations) > 0 {
-					allViolations = append(allViolations, result.Violations...)
-					totalRedacted += result.RedactedCount
-					totalTokenized += result.TokenizedCount
+				if len(violations) > 0 {
+					allViolations = append(allViolations, violations...)
+					totalRedacted += redactedCount
+					if includeTokenized {
+						totalTokenized += tokenizedCount
+					}
 				}
 			}
-			// Skip input_image and other non-text content types
 		}
 	}
 
-	// Re-marshal sanitized messages array
 	sanitizedInput, err := json.Marshal(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal sanitized messages: %w", err)
@@ -670,73 +678,6 @@ func (p *Proxy) sanitizeResponseInput(inputRaw json.RawMessage, sessionID string
 		AllViolations:  allViolations,
 		TotalRedacted:  totalRedacted,
 		TotalTokenized: totalTokenized,
-	}, nil
-}
-
-func (p *Proxy) sanitizeResponseInputRedact(inputRaw json.RawMessage) (*ResponseSanitizationResult, error) {
-	allViolations := []detector.Violation{}
-	totalRedacted := 0
-
-	var inputStr string
-	if err := json.Unmarshal(inputRaw, &inputStr); err == nil {
-		result, err := p.GetSanitizer().Sanitize(inputStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to sanitize string input: %w", err)
-		}
-
-		if len(result.Violations) > 0 {
-			allViolations = append(allViolations, result.Violations...)
-			totalRedacted += result.RedactedCount
-		}
-
-		sanitizedInput, err := json.Marshal(result.SanitizedPrompt)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal sanitized input: %w", err)
-		}
-
-		return &ResponseSanitizationResult{
-			SanitizedInput: sanitizedInput,
-			AllViolations:  allViolations,
-			TotalRedacted:  totalRedacted,
-			TotalTokenized: 0,
-		}, nil
-	}
-
-	var messages []ResponseMessage
-	if err := json.Unmarshal(inputRaw, &messages); err != nil {
-		return nil, fmt.Errorf("input must be either a string or array of messages: %w", err)
-	}
-
-	for i := range messages {
-		for j := range messages[i].Content {
-			contentBlock := &messages[i].Content[j]
-
-			if contentBlock.Type == "input_text" && contentBlock.Text != "" {
-				result, err := p.GetSanitizer().Sanitize(contentBlock.Text)
-				if err != nil {
-					return nil, fmt.Errorf("failed to sanitize content block: %w", err)
-				}
-
-				contentBlock.Text = result.SanitizedPrompt
-
-				if len(result.Violations) > 0 {
-					allViolations = append(allViolations, result.Violations...)
-					totalRedacted += result.RedactedCount
-				}
-			}
-		}
-	}
-
-	sanitizedInput, err := json.Marshal(messages)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal sanitized messages: %w", err)
-	}
-
-	return &ResponseSanitizationResult{
-		SanitizedInput: sanitizedInput,
-		AllViolations:  allViolations,
-		TotalRedacted:  totalRedacted,
-		TotalTokenized: 0,
 	}, nil
 }
 

@@ -75,7 +75,11 @@ func main() {
 func buildSanitizer(cfg *config.Config, det *detector.Detector) (*sanitizer.Sanitizer, *tokenizer.Resolver) {
 	mode := cfg.Proxy.Behavior.SanitizationMode
 	if mode == "tokenize" {
-		vaultManager := tokenizer.NewVaultManager(time.Duration(cfg.Proxy.Behavior.TokenTTLms) * time.Millisecond)
+		vaultManager := tokenizer.NewVaultManager(
+			time.Duration(cfg.Proxy.Behavior.TokenTTLms)*time.Millisecond,
+			tokenizer.WithMaxVaults(cfg.Proxy.Behavior.MaxVaults),
+			tokenizer.WithMaxTokensPerVault(cfg.Proxy.Behavior.MaxTokensPerVault),
+		)
 		tok := tokenizer.NewTokenizer()
 		resolver := tokenizer.NewResolver(vaultManager)
 		return sanitizer.NewWithTokenizer(det, tok, vaultManager, mode), resolver

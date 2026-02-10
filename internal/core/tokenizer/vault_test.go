@@ -19,7 +19,9 @@ func TestVaultStoreAndLookup(t *testing.T) {
 		t.Fatalf("expected vault creation to succeed, got error: %v", err)
 	}
 
-	vault.Store("john@acme.com", "user_1@example.com")
+	if err := vault.Store("john@acme.com", "user_1@example.com"); err != nil {
+		t.Fatalf("expected store to succeed, got error: %v", err)
+	}
 
 	token, ok := vault.GetToken("john@acme.com")
 	if !ok {
@@ -165,7 +167,10 @@ func TestVaultConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			original := fmt.Sprintf("value-%d", idx)
 			token := fmt.Sprintf("token-%d", idx)
-			vault.Store(original, token)
+			if err := vault.Store(original, token); err != nil {
+				errCh <- fmt.Sprintf("store failed: %v", err)
+				return
+			}
 
 			if got, ok := vault.GetToken(original); !ok || got != token {
 				errCh <- fmt.Sprintf("token lookup = %q, ok=%t", got, ok)

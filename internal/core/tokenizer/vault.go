@@ -17,19 +17,51 @@ type Vault struct {
 	mu        sync.RWMutex
 	tokens    TokenMap
 	inflight  map[string]chan struct{}
+	maxTokens int
 }
 
 type VaultManager struct {
-	mu     sync.RWMutex
-	vaults map[string]*Vault
-	ttl    time.Duration
+	mu                sync.RWMutex
+	vaults            map[string]*Vault
+	ttl               time.Duration
+	maxVaults         int
+	maxTokensPerVault int
 }
 
-func NewVaultManager(ttl time.Duration) *VaultManager {
-	return &VaultManager{
-		vaults: make(map[string]*Vault),
-		ttl:    ttl,
+const (
+	defaultMaxVaults         = 10000
+	defaultMaxTokensPerVault = 100000
+)
+
+type VaultManagerOption func(*VaultManager)
+
+func WithMaxVaults(maxVaults int) VaultManagerOption {
+	return func(vm *VaultManager) {
+		if maxVaults > 0 {
+			vm.maxVaults = maxVaults
+		}
 	}
+}
+
+func WithMaxTokensPerVault(maxTokens int) VaultManagerOption {
+	return func(vm *VaultManager) {
+		if maxTokens > 0 {
+			vm.maxTokensPerVault = maxTokens
+		}
+	}
+}
+
+func NewVaultManager(ttl time.Duration, opts ...VaultManagerOption) *VaultManager {
+	vm := &VaultManager{
+		vaults:            make(map[string]*Vault),
+		ttl:               ttl,
+		maxVaults:         defaultMaxVaults,
+		maxTokensPerVault: defaultMaxTokensPerVault,
+	}
+	for _, opt := range opts {
+		opt(vm)
+	}
+	return vm
 }
 
 func (vm *VaultManager) GetOrCreate(sessionID string) (*Vault, error) {
@@ -51,7 +83,14 @@ func (vm *VaultManager) GetOrCreate(sessionID string) (*Vault, error) {
 		}
 	}
 
-	vault := newVault(sessionID, now, vm.ttl)
+	if vm.maxVaults > 0 && len(vm.vaults) >= vm.maxVaults {
+		vm.cleanupExpiredLocked(now)
+		if len(vm.vaults) >= vm.maxVaults {
+			return nil, ErrVaultFull
+		}
+	}
+
+	vault := newVault(sessionID, now, vm.ttl, vm.maxTokensPerVault)
 	vm.vaults[sessionID] = vault
 	return vault, nil
 }
@@ -93,6 +132,10 @@ func (vm *VaultManager) Cleanup() {
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
 
+	vm.cleanupExpiredLocked(now)
+}
+
+func (vm *VaultManager) cleanupExpiredLocked(now time.Time) {
 	for sessionID, vault := range vm.vaults {
 		if vault.isExpired(now) {
 			delete(vm.vaults, sessionID)
@@ -100,12 +143,19 @@ func (vm *VaultManager) Cleanup() {
 	}
 }
 
-func (v *Vault) Store(original, token string) {
+func (v *Vault) Store(original, token string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
+	if _, exists := v.tokens.forward[original]; !exists {
+		if v.maxTokens > 0 && len(v.tokens.forward) >= v.maxTokens {
+			return ErrVaultFull
+		}
+	}
+
 	v.tokens.forward[original] = token
 	v.tokens.reverse[token] = original
+	return nil
 }
 
 func (v *Vault) GetToken(original string) (string, bool) {
@@ -131,7 +181,7 @@ func (v *Vault) Size() int {
 	return len(v.tokens.forward)
 }
 
-func newVault(sessionID string, now time.Time, ttl time.Duration) *Vault {
+func newVault(sessionID string, now time.Time, ttl time.Duration, maxTokens int) *Vault {
 	return &Vault{
 		sessionID: sessionID,
 		expiresAt: now.Add(ttl),
@@ -140,7 +190,8 @@ func newVault(sessionID string, now time.Time, ttl time.Duration) *Vault {
 			reverse:  make(map[string]string),
 			counters: make(map[string]uint64),
 		},
-		inflight: make(map[string]chan struct{}),
+		inflight:  make(map[string]chan struct{}),
+		maxTokens: maxTokens,
 	}
 }
 
