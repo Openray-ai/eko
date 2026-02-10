@@ -739,6 +739,11 @@ type ViolationEvent struct {
 	Details         []detector.Violation `json:"details,omitempty"`
 }
 
+const (
+	violationEventTypeLegacy = "eko.violation_report"
+	violationEventTypeV1     = "eko.violation"
+)
+
 // sendViolationSSEEvent sends violation information as the first SSE event
 func sendViolationSSEEvent(c *gin.Context, violations []detector.Violation, redactedCount int) error {
 	if len(violations) == 0 {
@@ -757,24 +762,27 @@ func sendViolationSSEEvent(c *gin.Context, violations []detector.Violation, reda
 	}
 
 	// Create violation event
-	event := ViolationEvent{
-		Type:            "eko.violation",
+	baseEvent := ViolationEvent{
 		ViolationsFound: len(violations),
 		RedactedCount:   redactedCount,
 		Summary:         strings.Join(summaryParts, ","),
 		Details:         violations,
 	}
 
-	// Marshal to JSON
-	eventJSON, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal violation event: %w", err)
-	}
+	// Backward-compatibility: emit the legacy type first, then the newer type.
+	eventTypes := []string{violationEventTypeLegacy, violationEventTypeV1}
+	for _, eventType := range eventTypes {
+		baseEvent.Type = eventType
 
-	// Send as SSE event
-	_, err = fmt.Fprintf(c.Writer, "data: %s\n\n", string(eventJSON))
-	if err != nil {
-		return fmt.Errorf("failed to write violation event: %w", err)
+		eventJSON, err := json.Marshal(baseEvent)
+		if err != nil {
+			return fmt.Errorf("failed to marshal violation event: %w", err)
+		}
+
+		_, err = fmt.Fprintf(c.Writer, "data: %s\n\n", string(eventJSON))
+		if err != nil {
+			return fmt.Errorf("failed to write violation event: %w", err)
+		}
 	}
 
 	// Flush immediately
@@ -783,6 +791,7 @@ func sendViolationSSEEvent(c *gin.Context, violations []detector.Violation, reda
 	logger.Info("Sent violation SSE event", logger.Fields{
 		"violations_found": len(violations),
 		"redacted_count":   redactedCount,
+		"types":            eventTypes,
 	})
 
 	return nil

@@ -58,4 +58,5 @@ bin/
 gcp/*.json
 github-actions-key.json
 
+# Temporary assessment files
 assessments/

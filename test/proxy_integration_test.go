@@ -350,6 +350,9 @@ func TestChatCompletionsProxyStreaming(t *testing.T) {
 			// Read SSE stream
 			scanner := bufio.NewScanner(resp.Body)
 			foundViolationEvent := false
+			foundLegacyViolation := false
+			foundNewViolation := false
+			firstViolationType := ""
 			eventCount := 0
 
 			for scanner.Scan() {
@@ -373,17 +376,32 @@ func TestChatCompletionsProxyStreaming(t *testing.T) {
 
 				if eventCount == 1 {
 					// Check if first event is violation event
-					if eventType, ok := event["type"].(string); ok && eventType == "eko.violation" {
-						foundViolationEvent = true
-						t.Logf("First event is violation event: %+v", event)
+					if eventType, ok := event["type"].(string); ok {
+						firstViolationType = eventType
+						if eventType == "eko.violation_report" || eventType == "eko.violation" {
+							foundViolationEvent = true
+							t.Logf("First event is violation event: %+v", event)
+						}
+					}
+				}
+
+				if eventType, ok := event["type"].(string); ok {
+					if eventType == "eko.violation_report" {
+						foundLegacyViolation = true
+					}
+					if eventType == "eko.violation" {
+						foundNewViolation = true
 					}
 				}
 			}
 
 			if tt.expectViolations && !foundViolationEvent {
-				t.Error("Expected violation event as first SSE event, but not found")
+				t.Errorf("Expected violation event as first SSE event, but got type %q", firstViolationType)
 			} else if !tt.expectViolations && foundViolationEvent {
 				t.Error("Did not expect violation event, but found one")
+			}
+			if tt.expectViolations && (!foundLegacyViolation || !foundNewViolation) {
+				t.Errorf("Expected both legacy and new violation types, got legacy=%v new=%v", foundLegacyViolation, foundNewViolation)
 			}
 
 			t.Logf("Processed %d SSE events", eventCount)
@@ -448,6 +466,9 @@ func TestResponsesProxyStreaming(t *testing.T) {
 			// Read SSE stream
 			scanner := bufio.NewScanner(resp.Body)
 			foundViolationEvent := false
+			foundLegacyViolation := false
+			foundNewViolation := false
+			firstViolationType := ""
 			eventCount := 0
 
 			for scanner.Scan() {
@@ -468,17 +489,32 @@ func TestResponsesProxyStreaming(t *testing.T) {
 
 				if eventCount == 1 {
 					// Check if first event is violation event
-					if eventType, ok := event["type"].(string); ok && eventType == "eko.violation" {
-						foundViolationEvent = true
-						t.Logf("First event is violation event: %+v", event)
+					if eventType, ok := event["type"].(string); ok {
+						firstViolationType = eventType
+						if eventType == "eko.violation_report" || eventType == "eko.violation" {
+							foundViolationEvent = true
+							t.Logf("First event is violation event: %+v", event)
+						}
+					}
+				}
+
+				if eventType, ok := event["type"].(string); ok {
+					if eventType == "eko.violation_report" {
+						foundLegacyViolation = true
+					}
+					if eventType == "eko.violation" {
+						foundNewViolation = true
 					}
 				}
 			}
 
 			if tt.expectViolations && !foundViolationEvent {
-				t.Error("Expected violation event as first SSE event, but not found")
+				t.Errorf("Expected violation event as first SSE event, but got type %q", firstViolationType)
 			} else if !tt.expectViolations && foundViolationEvent {
 				t.Error("Did not expect violation event, but found one")
+			}
+			if tt.expectViolations && (!foundLegacyViolation || !foundNewViolation) {
+				t.Errorf("Expected both legacy and new violation types, got legacy=%v new=%v", foundLegacyViolation, foundNewViolation)
 			}
 
 			t.Logf("Processed %d SSE events", eventCount)
