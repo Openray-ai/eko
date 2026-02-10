@@ -58,5 +58,5 @@ bin/
 gcp/*.json
 github-actions-key.json
 
-# Temporary assessment files
-assessments/
+# Internal analysis and planning artifacts (not part of application runtime)
+meta/
