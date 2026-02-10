@@ -2,6 +2,7 @@ package tokenizer
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -162,6 +163,67 @@ func TestTokenizerGenerateDeterministicReuse(t *testing.T) {
 	}
 	if size := vault.Size(); size != 1 {
 		t.Fatalf("vault size = %d, want %d", size, 1)
+	}
+}
+
+func TestTokenizerGenerateConcurrentReuse(t *testing.T) {
+	manager := NewVaultManager(time.Minute)
+	vault, err := manager.GetOrCreate(tokenizerSessionID)
+	if err != nil {
+		t.Fatalf("expected vault creation to succeed, got error: %v", err)
+	}
+
+	tokenizer := NewTokenizer()
+	violation := detector.Violation{
+		Type:    "pii",
+		Pattern: "email",
+		Matched: "johnsmith@example.com",
+	}
+
+	const workers = 64
+	start := make(chan struct{})
+	errCh := make(chan error, workers)
+	tokens := make([]string, workers)
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		idx := i
+		go func() {
+			defer wg.Done()
+			<-start
+			token, err := tokenizer.Generate(violation, vault)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			tokens[idx] = token
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatalf("expected token generation to succeed, got error: %v", err)
+	}
+
+	firstToken := tokens[0]
+	for i, token := range tokens {
+		if token != firstToken {
+			t.Fatalf("token[%d] = %q, want %q", i, token, firstToken)
+		}
+	}
+	if size := vault.Size(); size != 1 {
+		t.Fatalf("vault size = %d, want %d", size, 1)
+	}
+
+	vault.mu.RLock()
+	counter := vault.tokens.counters["email"]
+	vault.mu.RUnlock()
+	if counter != 1 {
+		t.Fatalf("email counter = %d, want %d", counter, 1)
 	}
 }
 

@@ -16,6 +16,7 @@ type Vault struct {
 	expiresAt time.Time
 	mu        sync.RWMutex
 	tokens    TokenMap
+	inflight  map[string]chan struct{}
 }
 
 type VaultManager struct {
@@ -139,6 +140,7 @@ func newVault(sessionID string, now time.Time, ttl time.Duration) *Vault {
 			reverse:  make(map[string]string),
 			counters: make(map[string]uint64),
 		},
+		inflight: make(map[string]chan struct{}),
 	}
 }
 

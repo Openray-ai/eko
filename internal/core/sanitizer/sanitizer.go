@@ -205,15 +205,6 @@ func (s *Sanitizer) redactViolations(input string, violations []detector.Violati
 	return result
 }
 
-// tokenizeViolations applies tokenization strategies to the input using a session vault
-func (s *Sanitizer) tokenizeViolations(input string, violations []detector.Violation, sessionID string) string {
-	result, _, err := s.tokenizeViolationsWithCount(input, violations, sessionID)
-	if err != nil {
-		return input
-	}
-	return result
-}
-
 func (s *Sanitizer) tokenizeViolationsWithCount(input string, violations []detector.Violation, sessionID string) (string, int, error) {
 	if len(violations) == 0 {
 		return input, 0, nil

@@ -118,6 +118,8 @@ type ResponseSanitizationResult struct {
 	TotalTokenized int
 }
 
+const streamingSanitizationOverride = "streaming_not_supported"
+
 // HandleChatCompletion processes OpenAI chat completion requests with sanitization
 func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 	startTime := time.Now()
@@ -174,6 +176,8 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 	// Handle streaming vs non-streaming
 	if req.Stream {
 		// === STREAMING MODE ===
+		p.logStreamingSanitizationOverride(sessionID)
+		setStreamingSanitizationHeaders(c)
 		setupSSEHeaders(c)
 
 		// Send violation event first if violations found
@@ -400,6 +404,20 @@ func (p *Proxy) addResponseViolationHeaders(c *gin.Context, result *ResponseSani
 	}
 }
 
+func (p *Proxy) logStreamingSanitizationOverride(sessionID string) {
+	logger.Warn("Streaming tokenization not supported; using redaction", logger.Fields{
+		"sanitization_mode": p.GetSanitizer().SanitizationMode(),
+		"effective_mode":    "redact",
+		"override":          streamingSanitizationOverride,
+		"session_id":        sessionID,
+	})
+}
+
+func setStreamingSanitizationHeaders(c *gin.Context) {
+	c.Header("X-Eko-Sanitization-Mode", "redact")
+	c.Header("X-Eko-Sanitization-Override", streamingSanitizationOverride)
+}
+
 func (p *Proxy) HandleResponse(c *gin.Context) {
 	startTime := time.Now()
 
@@ -452,6 +470,8 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 
 	// Handle streaming vs non-streaming
 	if req.Stream {
+		p.logStreamingSanitizationOverride(sessionID)
+		setStreamingSanitizationHeaders(c)
 		setupSSEHeaders(c)
 
 		if err := sendViolationSSEEvent(c, sanitizationResult.AllViolations, sanitizationResult.TotalRedacted); err != nil {
@@ -563,6 +583,8 @@ func resolveStatusFromError(err error) string {
 func (p *Proxy) ensureSessionID(c *gin.Context) string {
 	sessionID := c.GetHeader("X-Eko-Session-ID")
 	if sessionID == "" {
+		sessionID = tokenizer.GenerateSessionID()
+	} else if err := tokenizer.ValidateSessionID(sessionID); err != nil {
 		sessionID = tokenizer.GenerateSessionID()
 	}
 	c.Header("X-Eko-Session-ID", sessionID)

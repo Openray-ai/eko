@@ -50,26 +50,46 @@ func (t *Tokenizer) Generate(v detector.Violation, vault *Vault) (string, error)
 		return "", ErrCredentialTokenization
 	}
 
-	if token, exists := vault.GetToken(v.Matched); exists {
+	for {
+		vault.mu.Lock()
+		if token, exists := vault.tokens.forward[v.Matched]; exists {
+			vault.mu.Unlock()
+			return token, nil
+		}
+		if wait, exists := vault.inflight[v.Matched]; exists {
+			vault.mu.Unlock()
+			<-wait
+			continue
+		}
+
+		wait := make(chan struct{})
+		vault.inflight[v.Matched] = wait
+		vault.mu.Unlock()
+
+		generator := t.generatorForViolation(v)
+		token, err := generator.Generate(v, vault)
+
+		vault.mu.Lock()
+		if err != nil {
+			delete(vault.inflight, v.Matched)
+			close(wait)
+			vault.mu.Unlock()
+			return "", err
+		}
+		if existing, exists := vault.tokens.forward[v.Matched]; exists {
+			delete(vault.inflight, v.Matched)
+			close(wait)
+			vault.mu.Unlock()
+			return existing, nil
+		}
+		vault.tokens.forward[v.Matched] = token
+		vault.tokens.reverse[token] = v.Matched
+		delete(vault.inflight, v.Matched)
+		close(wait)
+		vault.mu.Unlock()
+
 		return token, nil
 	}
-
-	generator := t.generatorForViolation(v)
-	token, err := generator.Generate(v, vault)
-	if err != nil {
-		return "", err
-	}
-
-	vault.mu.Lock()
-	if existing, exists := vault.tokens.forward[v.Matched]; exists {
-		vault.mu.Unlock()
-		return existing, nil
-	}
-	vault.tokens.forward[v.Matched] = token
-	vault.tokens.reverse[token] = v.Matched
-	vault.mu.Unlock()
-
-	return token, nil
 }
 
 func (t *Tokenizer) generatorForViolation(v detector.Violation) TokenGenerator {

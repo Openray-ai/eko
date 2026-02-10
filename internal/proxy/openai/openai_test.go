@@ -57,6 +57,28 @@ func TestProxy_SessionIDHeaders(t *testing.T) {
 			router := gin.New()
 			tt.register(router, proxy)
 
+			t.Run("replaces_invalid_session_id", func(t *testing.T) {
+				rec := performRequest(router, tt.path, tt.body, map[string]string{
+					"Content-Type":     "application/json",
+					"X-Eko-Session-ID": "invalid-session-id",
+				})
+
+				if rec.Code != http.StatusOK {
+					t.Fatalf("expected status 200, got %d", rec.Code)
+				}
+
+				sessionID := rec.Header().Get("X-Eko-Session-ID")
+				if sessionID == "" {
+					t.Fatal("expected session id header to be set")
+				}
+				if sessionID == "invalid-session-id" {
+					t.Fatal("expected session id header to be replaced")
+				}
+				if err := tokenizer.ValidateSessionID(sessionID); err != nil {
+					t.Fatalf("expected valid session id, got %q", sessionID)
+				}
+			})
+
 			t.Run("uses_existing_session_id", func(t *testing.T) {
 				sessionID := tokenizer.GenerateSessionID()
 				rec := performRequest(router, tt.path, tt.body, map[string]string{
@@ -94,6 +116,73 @@ func TestProxy_SessionIDHeaders(t *testing.T) {
 	}
 }
 
+func TestProxy_EnsureSessionID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	proxy := &Proxy{}
+
+	tests := []struct {
+		name        string
+		sessionID   string
+		expectSame  bool
+		expectValid bool
+	}{
+		{
+			name:        "generates_when_missing",
+			sessionID:   "",
+			expectSame:  false,
+			expectValid: true,
+		},
+		{
+			name:        "keeps_when_valid",
+			sessionID:   tokenizer.GenerateSessionID(),
+			expectSame:  true,
+			expectValid: true,
+		},
+		{
+			name:        "replaces_when_invalid",
+			sessionID:   "invalid-session-id",
+			expectSame:  false,
+			expectValid: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tt.sessionID != "" {
+				req.Header.Set("X-Eko-Session-ID", tt.sessionID)
+			}
+			c.Request = req
+
+			got := proxy.ensureSessionID(c)
+			respHeader := rec.Header().Get("X-Eko-Session-ID")
+			if got == "" {
+				t.Fatal("expected session id to be set")
+			}
+			if respHeader == "" {
+				t.Fatal("expected response header to be set")
+			}
+			if got != respHeader {
+				t.Fatalf("expected response header %q to match session id %q", respHeader, got)
+			}
+			if tt.expectSame && got != tt.sessionID {
+				t.Fatalf("expected session id to be preserved, got %q", got)
+			}
+			if !tt.expectSame && tt.sessionID != "" && got == tt.sessionID {
+				t.Fatalf("expected session id to change from %q", tt.sessionID)
+			}
+			if tt.expectValid {
+				if err := tokenizer.ValidateSessionID(got); err != nil {
+					t.Fatalf("expected valid session id, got %q", got)
+				}
+			}
+		})
+	}
+}
+
 func TestProxy_TokenizeMode_NonStreamingChatCompletionAddsHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -121,6 +210,9 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionAddsHeaders(t *testing.T) 
 
 	if got := rec.Header().Get("X-Eko-Sanitization-Mode"); got != "tokenize" {
 		t.Fatalf("expected sanitization mode tokenize, got %q", got)
+	}
+	if got := rec.Header().Get("X-Eko-Sanitization-Override"); got != "" {
+		t.Fatalf("expected no sanitization override for non-streaming, got %q", got)
 	}
 	if got := rec.Header().Get("X-Eko-Tokens-Issued"); got != "1" {
 		t.Fatalf("expected tokens issued header 1, got %q", got)
@@ -163,8 +255,11 @@ func TestProxy_TokenizeMode_StreamingChatCompletionUsesRedaction(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 
-	if got := rec.Header().Get("X-Eko-Sanitization-Mode"); got != "" {
-		t.Fatalf("expected no sanitization mode header for streaming, got %q", got)
+	if got := rec.Header().Get("X-Eko-Sanitization-Mode"); got != "redact" {
+		t.Fatalf("expected sanitization mode redact for streaming, got %q", got)
+	}
+	if got := rec.Header().Get("X-Eko-Sanitization-Override"); got != streamingSanitizationOverride {
+		t.Fatalf("expected sanitization override %q for streaming, got %q", streamingSanitizationOverride, got)
 	}
 	if got := rec.Header().Get("X-Eko-Tokens-Issued"); got != "" {
 		t.Fatalf("expected no tokens issued header for streaming, got %q", got)
