@@ -3,9 +3,11 @@ package sanitizer
 import (
 	"eko/internal/core/detector"
 	"eko/internal/core/patterns"
+	"eko/internal/core/tokenizer"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSanitizer_New(t *testing.T) {
@@ -382,4 +384,175 @@ func TestSanitizer_Sanitize_RealWorldExample(t *testing.T) {
 	t.Logf("Original: %s", input)
 	t.Logf("Sanitized: %s", result.SanitizedPrompt)
 	t.Logf("Violations: %d", len(result.Violations))
+}
+
+func TestSanitizer_SanitizeWithSession_TokenizeMode(t *testing.T) {
+	det := detector.New()
+	emailPattern := &patterns.CompiledPattern{
+		Name:        "email",
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        "pii",
+		Severity:    "BLOCK",
+		Description: "Email address",
+	}
+	det.LoadPattern(emailPattern)
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "tokenize")
+
+	input := "Contact john@example.com"
+	sessionID := "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
+	result, err := s.SanitizeWithSession(input, sessionID)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.SessionID != sessionID {
+		t.Errorf("expected session ID %s, got %s", sessionID, result.SessionID)
+	}
+
+	if result.TokenizedCount != 1 {
+		t.Errorf("expected tokenized count to be 1, got %d", result.TokenizedCount)
+	}
+
+	if strings.Contains(result.SanitizedPrompt, "john@example.com") {
+		t.Error("email should have been tokenized")
+	}
+}
+
+func TestSanitizer_SanitizeWithSession_RedactMode(t *testing.T) {
+	det := detector.New()
+	emailPattern := &patterns.CompiledPattern{
+		Name:        "email",
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        "pii",
+		Severity:    "BLOCK",
+		Description: "Email address",
+	}
+	det.LoadPattern(emailPattern)
+
+	s := NewWithTokenizer(det, nil, nil, "redact")
+
+	input := "Contact john@example.com"
+	sessionID := "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
+	result, err := s.SanitizeWithSession(input, sessionID)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.TokenizedCount != 0 {
+		t.Errorf("expected tokenized count to be 0, got %d", result.TokenizedCount)
+	}
+
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_EMAIL]") {
+		t.Errorf("expected redaction marker, got: %s", result.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_SanitizeWithSession_CredentialAlwaysRedacted(t *testing.T) {
+	det := detector.New()
+	patterns := []*patterns.CompiledPattern{
+		{
+			Name:        "email",
+			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+			Type:        "pii",
+			Severity:    "BLOCK",
+			Description: "Email address",
+		},
+		{
+			Name:        "openai_api_key",
+			Regex:       regexp.MustCompile(`sk-[a-zA-Z0-9]{48}`),
+			Type:        "credential",
+			Severity:    "BLOCK",
+			Description: "OpenAI API key",
+		},
+	}
+	det.LoadPatterns(patterns)
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "tokenize")
+
+	input := "Email john@example.com and key sk-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHabcd"
+	sessionID := "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
+	result, err := s.SanitizeWithSession(input, sessionID)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_API_KEY]") {
+		t.Errorf("expected credential to be redacted, got: %s", result.SanitizedPrompt)
+	}
+
+	if strings.Contains(result.SanitizedPrompt, "sk-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHabcd") {
+		t.Error("credential should not appear in sanitized output")
+	}
+
+	if result.TokenizedCount != 1 {
+		t.Errorf("expected tokenized count to be 1, got %d", result.TokenizedCount)
+	}
+}
+
+func TestSanitizer_SanitizeWithSession_DeterministicReuse(t *testing.T) {
+	det := detector.New()
+	emailPattern := &patterns.CompiledPattern{
+		Name:        "email",
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        "pii",
+		Severity:    "BLOCK",
+		Description: "Email address",
+	}
+	det.LoadPattern(emailPattern)
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "tokenize")
+
+	input := "Contact john@example.com"
+	sessionID := "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
+
+	first, err := s.SanitizeWithSession(input, sessionID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	second, err := s.SanitizeWithSession(input, sessionID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if first.SanitizedPrompt != second.SanitizedPrompt {
+		t.Errorf("expected deterministic token reuse, got %s and %s", first.SanitizedPrompt, second.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_Sanitize_BackwardCompatibility(t *testing.T) {
+	det := detector.New()
+	emailPattern := &patterns.CompiledPattern{
+		Name:        "email",
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        "pii",
+		Severity:    "BLOCK",
+		Description: "Email address",
+	}
+	det.LoadPattern(emailPattern)
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "tokenize")
+
+	input := "Contact john@example.com"
+	result, err := s.Sanitize(input)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_EMAIL]") {
+		t.Errorf("expected redaction marker, got: %s", result.SanitizedPrompt)
+	}
 }

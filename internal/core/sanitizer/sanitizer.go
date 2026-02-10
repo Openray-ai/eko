@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"eko/internal/core/detector"
+	"eko/internal/core/tokenizer"
 	"eko/internal/helpers/logger"
 	"fmt"
 	"sort"
@@ -11,7 +12,10 @@ import (
 
 // Sanitizer handles redaction and replacement of sensitive data
 type Sanitizer struct {
-	detector *detector.Detector
+	detector     *detector.Detector
+	tokenizer    *tokenizer.Tokenizer
+	vaultManager *tokenizer.VaultManager
+	mode         string
 }
 
 // Result contains the sanitized output and violations found
@@ -22,13 +26,38 @@ type Result struct {
 	Safe             bool                 `json:"safe"`
 	ProcessingTimeMs float64              `json:"processing_time_ms"`
 	RedactedCount    int                  `json:"redacted_count"`
+	TokenizedCount   int                  `json:"tokenized_count"`
+	SessionID        string               `json:"session_id,omitempty"`
 }
 
 // New creates a new Sanitizer instance
 func New(det *detector.Detector) *Sanitizer {
 	return &Sanitizer{
 		detector: det,
+		mode:     "redact",
 	}
+}
+
+// NewWithTokenizer creates a new Sanitizer instance with tokenization support
+func NewWithTokenizer(det *detector.Detector, tok *tokenizer.Tokenizer, vm *tokenizer.VaultManager, mode string) *Sanitizer {
+	if mode == "" {
+		mode = "redact"
+	}
+
+	return &Sanitizer{
+		detector:     det,
+		tokenizer:    tok,
+		vaultManager: vm,
+		mode:         mode,
+	}
+}
+
+// SanitizationMode returns the active sanitization mode.
+func (s *Sanitizer) SanitizationMode() string {
+	if s.mode == "" {
+		return "redact"
+	}
+	return s.mode
 }
 
 // Sanitize detects and redacts sensitive data from input
@@ -74,6 +103,74 @@ func (s *Sanitizer) Sanitize(input string) (*Result, error) {
 		Safe:             false,
 		ProcessingTimeMs: processingTime,
 		RedactedCount:    s.countRedacted(violations),
+		TokenizedCount:   0,
+	}, nil
+}
+
+// SanitizeWithSession detects and sanitizes sensitive data from input with session awareness
+func (s *Sanitizer) SanitizeWithSession(input, sessionID string) (*Result, error) {
+	startTime := time.Now()
+
+	violations, err := s.detector.Detect(input)
+	if err != nil {
+		return nil, fmt.Errorf("detection failed: %w", err)
+	}
+
+	if len(violations) == 0 {
+		return &Result{
+			OriginalPrompt:   input,
+			SanitizedPrompt:  input,
+			Violations:       violations,
+			Safe:             true,
+			ProcessingTimeMs: float64(time.Since(startTime).Microseconds()) / 1000.0,
+			RedactedCount:    0,
+			TokenizedCount:   0,
+			SessionID:        sessionID,
+		}, nil
+	}
+
+	mode := s.mode
+	if mode == "" {
+		mode = "redact"
+	}
+
+	var sanitized string
+	tokenizedCount := 0
+
+	switch mode {
+	case "tokenize":
+		if s.tokenizer == nil || s.vaultManager == nil {
+			return nil, fmt.Errorf("tokenization requires tokenizer and vault manager")
+		}
+		var err error
+		sanitized, tokenizedCount, err = s.tokenizeViolationsWithCount(input, violations, sessionID)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		sanitized = s.redactViolations(input, violations)
+	}
+
+	processingTime := float64(time.Since(startTime).Microseconds()) / 1000.0
+
+	logger.Info("Sanitization completed", logger.Fields{
+		"violations":       len(violations),
+		"redacted":         s.countRedacted(violations),
+		"tokenized":        tokenizedCount,
+		"processing_ms":    processingTime,
+		"input_length":     len(input),
+		"sanitized_length": len(sanitized),
+	})
+
+	return &Result{
+		OriginalPrompt:   input,
+		SanitizedPrompt:  sanitized,
+		Violations:       violations,
+		Safe:             false,
+		ProcessingTimeMs: processingTime,
+		RedactedCount:    s.countRedacted(violations),
+		TokenizedCount:   tokenizedCount,
+		SessionID:        sessionID,
 	}, nil
 }
 
@@ -106,6 +203,51 @@ func (s *Sanitizer) redactViolations(input string, violations []detector.Violati
 	}
 
 	return result
+}
+
+func (s *Sanitizer) tokenizeViolationsWithCount(input string, violations []detector.Violation, sessionID string) (string, int, error) {
+	if len(violations) == 0 {
+		return input, 0, nil
+	}
+
+	vault, err := s.vaultManager.GetOrCreate(sessionID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	sorted := make([]detector.Violation, len(violations))
+	copy(sorted, violations)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Position > sorted[j].Position
+	})
+
+	result := input
+	tokenizedCount := 0
+
+	for _, v := range sorted {
+		if v.Severity != "BLOCK" && v.Severity != "WARN" {
+			continue
+		}
+
+		var replacement string
+		switch v.Type {
+		case "credential":
+			replacement = s.getRedactionLabel(v.Pattern, v.Type)
+		default:
+			token, err := s.tokenizer.Generate(v, vault)
+			if err != nil {
+				return "", 0, err
+			}
+			replacement = token
+			tokenizedCount++
+		}
+
+		if v.Position >= 0 && v.End <= len(result) && v.Position < v.End {
+			result = result[:v.Position] + replacement + result[v.End:]
+		}
+	}
+
+	return result, tokenizedCount, nil
 }
 
 // getReplacementText returns the replacement text for a violation based on severity

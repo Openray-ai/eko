@@ -58,6 +58,10 @@ type BehaviorConfig struct {
 	OnViolation         string `yaml:"on_violation"` // block, sanitize, warn
 	LogRequests         bool   `yaml:"log_requests"`
 	AddViolationHeaders bool   `yaml:"add_violation_headers"`
+	SanitizationMode    string `yaml:"sanitization_mode"` // redact, tokenize
+	TokenTTLms          int    `yaml:"token_ttl_ms"`
+	MaxVaults           int    `yaml:"max_vaults"`
+	MaxTokensPerVault   int    `yaml:"max_tokens_per_vault"`
 }
 
 // PatternsConfig holds pattern loading configuration
@@ -109,6 +113,11 @@ func Load(filename string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	applyBehaviorDefaults(&config.Proxy.Behavior)
+	if err := validateBehaviorConfig(config.Proxy.Behavior); err != nil {
+		return nil, fmt.Errorf("invalid behavior config: %w", err)
+	}
+
 	return &config, nil
 }
 
@@ -144,6 +153,10 @@ func Default() *Config {
 				OnViolation:         "sanitize",
 				LogRequests:         true,
 				AddViolationHeaders: true,
+				SanitizationMode:    "redact",
+				TokenTTLms:          30000,
+				MaxVaults:           10000,
+				MaxTokensPerVault:   100000,
 			},
 		},
 		Patterns: PatternsConfig{
@@ -151,6 +164,37 @@ func Default() *Config {
 			CustomPatternsDir: "./patterns/custom",
 		},
 	}
+}
+
+func applyBehaviorDefaults(cfg *BehaviorConfig) {
+	if cfg.SanitizationMode == "" {
+		cfg.SanitizationMode = "redact"
+	}
+	if cfg.TokenTTLms == 0 {
+		cfg.TokenTTLms = 30000
+	}
+	if cfg.MaxVaults == 0 {
+		cfg.MaxVaults = 10000
+	}
+	if cfg.MaxTokensPerVault == 0 {
+		cfg.MaxTokensPerVault = 100000
+	}
+}
+
+func validateBehaviorConfig(cfg BehaviorConfig) error {
+	if cfg.SanitizationMode != "redact" && cfg.SanitizationMode != "tokenize" {
+		return fmt.Errorf("sanitization_mode must be \"redact\" or \"tokenize\"")
+	}
+	if cfg.TokenTTLms <= 0 {
+		return fmt.Errorf("token_ttl_ms must be > 0")
+	}
+	if cfg.MaxVaults <= 0 {
+		return fmt.Errorf("max_vaults must be > 0")
+	}
+	if cfg.MaxTokensPerVault <= 0 {
+		return fmt.Errorf("max_tokens_per_vault must be > 0")
+	}
+	return nil
 }
 
 func LoadConfig() *Config {

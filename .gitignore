@@ -57,3 +57,6 @@ bin/
 # GCP deployment files
 gcp/*.json
 github-actions-key.json
+
+# Internal analysis and planning artifacts (not part of application runtime)
+meta/
