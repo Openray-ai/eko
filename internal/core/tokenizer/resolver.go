@@ -20,17 +20,10 @@ func (r *Resolver) ResolveResponse(body []byte, sessionID string) ([]byte, error
 		return body, nil
 	}
 
-	vault.mu.RLock()
-	if len(vault.tokens.reverse) == 0 {
-		vault.mu.RUnlock()
+	reverse := vault.ReverseTokens()
+	if len(reverse) == 0 {
 		return body, nil
 	}
-
-	reverse := make(map[string]string, len(vault.tokens.reverse))
-	for token, original := range vault.tokens.reverse {
-		reverse[token] = original
-	}
-	vault.mu.RUnlock()
 
 	result := string(body)
 	for token, original := range reverse {

@@ -174,6 +174,21 @@ func (v *Vault) GetOriginal(token string) (string, bool) {
 	return original, ok
 }
 
+func (v *Vault) ReverseTokens() map[string]string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if len(v.tokens.reverse) == 0 {
+		return nil
+	}
+
+	reverse := make(map[string]string, len(v.tokens.reverse))
+	for token, original := range v.tokens.reverse {
+		reverse[token] = original
+	}
+	return reverse
+}
+
 func (v *Vault) Size() int {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
