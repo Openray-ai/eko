@@ -97,8 +97,8 @@ func TestVaultManagerExpiresVaults(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	_, err = manager.Get(sampleSessionID)
-	if err != ErrSessionExpired {
-		t.Fatalf("expected ErrSessionExpired, got %v", err)
+	if err != ErrSessionExpired && err != ErrVaultNotFound {
+		t.Fatalf("expected ErrSessionExpired or ErrVaultNotFound, got %v", err)
 	}
 }
 

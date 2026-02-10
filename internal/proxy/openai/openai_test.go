@@ -382,8 +382,8 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionExpiredVault(t *testing.T)
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 
-	if got := rec.Header().Get("X-Eko-Resolve-Status"); got != "vault_expired" {
-		t.Fatalf("expected resolve status vault_expired, got %q", got)
+	if got := rec.Header().Get("X-Eko-Resolve-Status"); got != "vault_expired" && got != "no_vault" {
+		t.Fatalf("expected resolve status vault_expired or no_vault, got %q", got)
 	}
 
 	token := tokenCapture.Value()

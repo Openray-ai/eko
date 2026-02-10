@@ -26,6 +26,9 @@ type VaultManager struct {
 	ttl               time.Duration
 	maxVaults         int
 	maxTokensPerVault int
+	cleanupTicker     *time.Ticker
+	stopCleanup       chan struct{}
+	stopOnce          sync.Once
 }
 
 const (
@@ -57,10 +60,12 @@ func NewVaultManager(ttl time.Duration, opts ...VaultManagerOption) *VaultManage
 		ttl:               ttl,
 		maxVaults:         defaultMaxVaults,
 		maxTokensPerVault: defaultMaxTokensPerVault,
+		stopCleanup:       make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(vm)
 	}
+	vm.startCleanup()
 	return vm
 }
 
@@ -133,6 +138,41 @@ func (vm *VaultManager) Cleanup() {
 	defer vm.mu.Unlock()
 
 	vm.cleanupExpiredLocked(now)
+}
+
+func (vm *VaultManager) Stop() {
+	vm.stopOnce.Do(func() {
+		close(vm.stopCleanup)
+		if vm.cleanupTicker != nil {
+			vm.cleanupTicker.Stop()
+		}
+	})
+}
+
+func (vm *VaultManager) startCleanup() {
+	const minCleanupInterval = 10 * time.Millisecond
+
+	interval := vm.ttl / 2
+	if vm.ttl <= 0 {
+		interval = time.Minute
+	}
+	if interval < minCleanupInterval {
+		interval = minCleanupInterval
+	}
+
+	vm.cleanupTicker = time.NewTicker(interval)
+	go vm.runCleanup()
+}
+
+func (vm *VaultManager) runCleanup() {
+	for {
+		select {
+		case <-vm.cleanupTicker.C:
+			vm.Cleanup()
+		case <-vm.stopCleanup:
+			return
+		}
+	}
 }
 
 func (vm *VaultManager) cleanupExpiredLocked(now time.Time) {
