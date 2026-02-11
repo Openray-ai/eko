@@ -53,9 +53,9 @@ func TestSanitizer_Sanitize_NoViolations(t *testing.T) {
 func TestSanitizer_Sanitize_EmailRedaction(t *testing.T) {
 	det := detector.New()
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "BLOCK",
 		Description: "Email address",
 	}
@@ -95,23 +95,23 @@ func TestSanitizer_Sanitize_EmailRedaction(t *testing.T) {
 func TestSanitizer_Sanitize_MultipleViolations(t *testing.T) {
 	det := detector.New()
 
-	patterns := []*patterns.CompiledPattern{
+	testPatterns := []*patterns.CompiledPattern{
 		{
-			Name:        "email",
+			Name:        patterns.PatternEmail,
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "BLOCK",
 			Description: "Email address",
 		},
 		{
-			Name:        "openai_api_key",
+			Name:        patterns.PatternOpenAIAPIKey,
 			Regex:       regexp.MustCompile(`sk-[a-zA-Z0-9]{48}`),
-			Type:        "credential",
+			Type:        patterns.TypeCredential,
 			Severity:    "BLOCK",
 			Description: "OpenAI API key",
 		},
 	}
-	det.LoadPatterns(patterns)
+	det.LoadPatterns(testPatterns)
 
 	s := New(det)
 
@@ -172,9 +172,9 @@ func TestSanitizer_Sanitize_SeverityLevels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			det := detector.New()
 			emailPattern := &patterns.CompiledPattern{
-				Name:        "email",
+				Name:        patterns.PatternEmail,
 				Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-				Type:        "pii",
+				Type:        patterns.TypePII,
 				Severity:    tt.severity,
 				Description: "Email address",
 			}
@@ -209,9 +209,9 @@ func TestSanitizer_Sanitize_SeverityLevels(t *testing.T) {
 func TestSanitizer_Sanitize_PreservesStructure(t *testing.T) {
 	det := detector.New()
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "BLOCK",
 		Description: "Email address",
 	}
@@ -288,13 +288,13 @@ func TestSanitizer_GetRedactionLabel(t *testing.T) {
 		patternType string
 		expected    string
 	}{
-		{"email", "pii", "[REDACTED_EMAIL]"},
-		{"openai_api_key", "credential", "[REDACTED_API_KEY]"},
-		{"nigerian_bvn", "pii", "[REDACTED_BVN]"},
-		{"credit_card", "financial", "[REDACTED_CARD]"},
-		{"unknown_pattern", "pii", "[REDACTED_PII]"},
-		{"unknown_pattern", "credential", "[REDACTED_CREDENTIAL]"},
-		{"unknown_pattern", "financial", "[REDACTED_FINANCIAL]"},
+		{patterns.PatternEmail, patterns.TypePII, "[REDACTED_EMAIL]"},
+		{patterns.PatternOpenAIAPIKey, patterns.TypeCredential, "[REDACTED_API_KEY]"},
+		{patterns.PatternNigerianBVN, patterns.TypePII, "[REDACTED_BVN]"},
+		{patterns.PatternCreditCard, patterns.TypeFinancial, "[REDACTED_CARD]"},
+		{"unknown_pattern", patterns.TypePII, "[REDACTED_PII]"},
+		{"unknown_pattern", patterns.TypeCredential, "[REDACTED_CREDENTIAL]"},
+		{"unknown_pattern", patterns.TypeFinancial, "[REDACTED_FINANCIAL]"},
 		{"unknown_pattern", "unknown_type", "[REDACTED]"},
 	}
 
@@ -329,30 +329,30 @@ func TestSanitizer_CountRedacted(t *testing.T) {
 func TestSanitizer_Sanitize_RealWorldExample(t *testing.T) {
 	det := detector.New()
 
-	patterns := []*patterns.CompiledPattern{
+	testPatterns := []*patterns.CompiledPattern{
 		{
-			Name:        "email",
+			Name:        patterns.PatternEmail,
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "WARN",
 			Description: "Email address",
 		},
 		{
-			Name:        "postgres_connection",
+			Name:        patterns.PatternPostgresConn,
 			Regex:       regexp.MustCompile(`postgres://[^\s]+`),
-			Type:        "credential",
+			Type:        patterns.TypeCredential,
 			Severity:    "BLOCK",
 			Description: "PostgreSQL connection string",
 		},
 		{
-			Name:        "nigerian_bvn",
+			Name:        patterns.PatternNigerianBVN,
 			Regex:       regexp.MustCompile(`\b\d{11}\b`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "BLOCK",
 			Description: "Nigerian BVN",
 		},
 	}
-	det.LoadPatterns(patterns)
+	det.LoadPatterns(testPatterns)
 
 	s := New(det)
 
@@ -389,9 +389,9 @@ func TestSanitizer_Sanitize_RealWorldExample(t *testing.T) {
 func TestSanitizer_SanitizeWithSession_TokenizeMode(t *testing.T) {
 	det := detector.New()
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "BLOCK",
 		Description: "Email address",
 	}
@@ -425,9 +425,9 @@ func TestSanitizer_SanitizeWithSession_TokenizeMode(t *testing.T) {
 func TestSanitizer_SanitizeWithSession_RedactMode(t *testing.T) {
 	det := detector.New()
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "BLOCK",
 		Description: "Email address",
 	}
@@ -454,23 +454,23 @@ func TestSanitizer_SanitizeWithSession_RedactMode(t *testing.T) {
 
 func TestSanitizer_SanitizeWithSession_CredentialAlwaysRedacted(t *testing.T) {
 	det := detector.New()
-	patterns := []*patterns.CompiledPattern{
+	testPatterns := []*patterns.CompiledPattern{
 		{
-			Name:        "email",
+			Name:        patterns.PatternEmail,
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "BLOCK",
 			Description: "Email address",
 		},
 		{
-			Name:        "openai_api_key",
+			Name:        patterns.PatternOpenAIAPIKey,
 			Regex:       regexp.MustCompile(`sk-[a-zA-Z0-9]{48}`),
-			Type:        "credential",
+			Type:        patterns.TypeCredential,
 			Severity:    "BLOCK",
 			Description: "OpenAI API key",
 		},
 	}
-	det.LoadPatterns(patterns)
+	det.LoadPatterns(testPatterns)
 
 	tok := tokenizer.NewTokenizer()
 	vm := tokenizer.NewVaultManager(1 * time.Minute)
@@ -500,9 +500,9 @@ func TestSanitizer_SanitizeWithSession_CredentialAlwaysRedacted(t *testing.T) {
 func TestSanitizer_SanitizeWithSession_DeterministicReuse(t *testing.T) {
 	det := detector.New()
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "BLOCK",
 		Description: "Email address",
 	}
@@ -533,9 +533,9 @@ func TestSanitizer_SanitizeWithSession_DeterministicReuse(t *testing.T) {
 func TestSanitizer_Sanitize_BackwardCompatibility(t *testing.T) {
 	det := detector.New()
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "BLOCK",
 		Description: "Email address",
 	}

@@ -39,3 +39,33 @@ const (
 	SeverityWarn  = "WARN"
 	SeverityLog   = "LOG"
 )
+
+// PatternName constants for pattern identifiers used in code
+const (
+	PatternEmail             = "email"
+	PatternNigerianBVN       = "nigerian_bvn"
+	PatternNigerianPhone     = "nigerian_phone"
+	PatternNigerianAccount   = "nigerian_account"
+	PatternKenyanPhone       = "kenyan_phone"
+	PatternMpesaCode         = "mpesa_code"
+	PatternSouthAfricanID    = "south_african_id"
+	PatternSouthAfricanPhone = "south_african_phone"
+	PatternGhanaianPhone     = "ghanaian_phone"
+	PatternCreditCard        = "credit_card"
+	PatternIBAN              = "iban"
+	PatternSwiftCode         = "swift_code"
+	PatternOpenAIAPIKey      = "openai_api_key"
+	PatternAnthropicAPIKey   = "anthropic_api_key"
+	PatternGoogleAPIKey      = "google_api_key"
+	PatternAWSAccessKey      = "aws_access_key"
+	PatternPostgresConn      = "postgres_connection"
+	PatternMongoDBConn       = "mongodb_connection"
+	PatternMySQLConn         = "mysql_connection"
+	PatternJWTToken          = "jwt_token"
+	PatternSSHPrivateKey     = "ssh_private_key"
+	PatternPasswordVar       = "password_var"
+
+	// PhoneSuffix is the common suffix for phone-type patterns, used for
+	// dynamic generator selection in the tokenizer.
+	PhoneSuffix = "_phone"
+)

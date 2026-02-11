@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"eko/internal/core/detector"
+	"eko/internal/core/patterns"
 )
 
 type TokenGenerator interface {
@@ -26,16 +27,16 @@ func NewTokenizer() *Tokenizer {
 	defaultGenerator := &DefaultGenerator{}
 
 	generators := map[string]TokenGenerator{
-		"email":               emailGenerator,
-		"nigerian_bvn":        numericGenerator,
-		"nigerian_account":    numericGenerator,
-		"credit_card":         numericGenerator,
-		"south_african_id":    numericGenerator,
-		"iban":                ibanGenerator,
-		"nigerian_phone":      phoneGenerator,
-		"kenyan_phone":        phoneGenerator,
-		"south_african_phone": phoneGenerator,
-		"ghanaian_phone":      phoneGenerator,
+		patterns.PatternEmail:             emailGenerator,
+		patterns.PatternNigerianBVN:       numericGenerator,
+		patterns.PatternNigerianAccount:   numericGenerator,
+		patterns.PatternCreditCard:        numericGenerator,
+		patterns.PatternSouthAfricanID:    numericGenerator,
+		patterns.PatternIBAN:              ibanGenerator,
+		patterns.PatternNigerianPhone:     phoneGenerator,
+		patterns.PatternKenyanPhone:       phoneGenerator,
+		patterns.PatternSouthAfricanPhone: phoneGenerator,
+		patterns.PatternGhanaianPhone:     phoneGenerator,
 	}
 
 	return &Tokenizer{
@@ -46,7 +47,7 @@ func NewTokenizer() *Tokenizer {
 }
 
 func (t *Tokenizer) Generate(v detector.Violation, vault *Vault) (string, error) {
-	if v.Type == "credential" {
+	if v.Type == patterns.TypeCredential {
 		return "", ErrCredentialTokenization
 	}
 
@@ -99,7 +100,7 @@ func (t *Tokenizer) Generate(v detector.Violation, vault *Vault) (string, error)
 		close(wait)
 		vault.mu.Unlock()
 
-		if v.Pattern == "email" {
+		if v.Pattern == patterns.PatternEmail {
 			if subs := emailSubTokens(v.Matched, token); len(subs) > 0 {
 				vault.StoreSubTokens(subs)
 			}
@@ -113,7 +114,7 @@ func (t *Tokenizer) generatorForViolation(v detector.Violation) TokenGenerator {
 	if generator, ok := t.generators[v.Pattern]; ok {
 		return generator
 	}
-	if strings.HasSuffix(v.Pattern, "_phone") {
+	if strings.HasSuffix(v.Pattern, patterns.PhoneSuffix) {
 		return t.phoneGenerator
 	}
 	return t.defaultGenerator

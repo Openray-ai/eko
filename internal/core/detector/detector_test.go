@@ -64,9 +64,9 @@ func TestDetector_Detect_SinglePattern(t *testing.T) {
 
 	// Load an email pattern
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "WARN",
 		Description: "Email address",
 	}
@@ -84,13 +84,13 @@ func TestDetector_Detect_SinglePattern(t *testing.T) {
 	}
 
 	v := violations[0]
-	if v.Pattern != "email" {
+	if v.Pattern != patterns.PatternEmail {
 		t.Errorf("expected pattern 'email', got '%s'", v.Pattern)
 	}
 	if v.Matched != "john@example.com" {
 		t.Errorf("expected matched 'john@example.com', got '%s'", v.Matched)
 	}
-	if v.Type != "pii" {
+	if v.Type != patterns.TypePII {
 		t.Errorf("expected type 'pii', got '%s'", v.Type)
 	}
 	if v.Severity != "WARN" {
@@ -102,9 +102,9 @@ func TestDetector_Detect_MultipleMatches(t *testing.T) {
 	d := New()
 
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "WARN",
 		Description: "Email address",
 	}
@@ -144,31 +144,31 @@ func TestDetector_Detect_MultiplePatterns(t *testing.T) {
 	d := New()
 
 	// Load multiple patterns
-	patterns := []*patterns.CompiledPattern{
+	testPatterns := []*patterns.CompiledPattern{
 		{
-			Name:        "email",
+			Name:        patterns.PatternEmail,
 			Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "WARN",
 			Description: "Email address",
 		},
 		{
-			Name:        "openai_api_key",
+			Name:        patterns.PatternOpenAIAPIKey,
 			Regex:       regexp.MustCompile(`sk-[a-zA-Z0-9]{48}`),
-			Type:        "credential",
+			Type:        patterns.TypeCredential,
 			Severity:    "BLOCK",
 			Description: "OpenAI API key",
 		},
 		{
 			Name:        "phone",
 			Regex:       regexp.MustCompile(`\+\d{1,3}\s?\d{9,10}`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "WARN",
 			Description: "Phone number",
 		},
 	}
 
-	d.LoadPatterns(patterns)
+	d.LoadPatterns(testPatterns)
 
 	// sk- followed by exactly 48 alphanumeric characters
 	input := "Email: john@example.com, API: sk-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHabcd, Phone: +234 9012345678"
@@ -190,7 +190,7 @@ func TestDetector_Detect_MultiplePatterns(t *testing.T) {
 	}
 
 	// At minimum, email and API key should be detected
-	requiredPatterns := []string{"email", "openai_api_key"}
+	requiredPatterns := []string{patterns.PatternEmail, patterns.PatternOpenAIAPIKey}
 	for _, required := range requiredPatterns {
 		if !foundPatterns[required] {
 			t.Errorf("pattern '%s' was not detected", required)
@@ -202,24 +202,24 @@ func TestDetector_Detect_Deduplication(t *testing.T) {
 	d := New()
 
 	// Load two overlapping patterns
-	patterns := []*patterns.CompiledPattern{
+	dedupPatterns := []*patterns.CompiledPattern{
 		{
 			Name:        "generic_number",
 			Regex:       regexp.MustCompile(`\d{11}`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "LOG",
 			Description: "11 digit number",
 		},
 		{
-			Name:        "nigerian_bvn",
+			Name:        patterns.PatternNigerianBVN,
 			Regex:       regexp.MustCompile(`\b\d{11}\b`),
-			Type:        "pii",
+			Type:        patterns.TypePII,
 			Severity:    "BLOCK",
 			Description: "Nigerian BVN",
 		},
 	}
 
-	d.LoadPatterns(patterns)
+	d.LoadPatterns(dedupPatterns)
 
 	input := "My BVN is 12345678901"
 	violations, err := d.Detect(input)
@@ -245,9 +245,9 @@ func TestDetector_Detect_EmptyInput(t *testing.T) {
 	d := New()
 
 	emailPattern := &patterns.CompiledPattern{
-		Name:        "email",
+		Name:        patterns.PatternEmail,
 		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
-		Type:        "pii",
+		Type:        patterns.TypePII,
 		Severity:    "WARN",
 		Description: "Email address",
 	}

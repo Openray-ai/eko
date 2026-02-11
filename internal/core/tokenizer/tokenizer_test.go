@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"eko/internal/core/detector"
+	"eko/internal/core/patterns"
 )
 
 const tokenizerSessionID = "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
@@ -144,8 +145,8 @@ func TestTokenizerGenerateDeterministicReuse(t *testing.T) {
 
 	tokenizer := NewTokenizer()
 	violation := detector.Violation{
-		Type:    "pii",
-		Pattern: "email",
+		Type:    patterns.TypePII,
+		Pattern: patterns.PatternEmail,
 		Matched: "johnsmith@example.com",
 	}
 
@@ -175,8 +176,8 @@ func TestTokenizerGenerateConcurrentReuse(t *testing.T) {
 
 	tokenizer := NewTokenizer()
 	violation := detector.Violation{
-		Type:    "pii",
-		Pattern: "email",
+		Type:    patterns.TypePII,
+		Pattern: patterns.PatternEmail,
 		Matched: "johnsmith@example.com",
 	}
 
@@ -236,13 +237,13 @@ func TestTokenizerGenerateUniquenessAcrossOriginals(t *testing.T) {
 
 	tokenizer := NewTokenizer()
 	first := detector.Violation{
-		Type:    "pii",
-		Pattern: "email",
+		Type:    patterns.TypePII,
+		Pattern: patterns.PatternEmail,
 		Matched: "johnsmith@example.com",
 	}
 	second := detector.Violation{
-		Type:    "pii",
-		Pattern: "email",
+		Type:    patterns.TypePII,
+		Pattern: patterns.PatternEmail,
 		Matched: "janesmith@example.com",
 	}
 
@@ -272,7 +273,7 @@ func TestTokenizerRejectsCredentials(t *testing.T) {
 
 	tokenizer := NewTokenizer()
 	violation := detector.Violation{
-		Type:    "credential",
+		Type:    patterns.TypeCredential,
 		Pattern: "api_key",
 		Matched: "sk-proj-abc123",
 	}

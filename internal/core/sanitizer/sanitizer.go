@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"eko/internal/core/detector"
+	"eko/internal/core/patterns"
 	"eko/internal/core/tokenizer"
 	"eko/internal/helpers/logger"
 	"fmt"
@@ -193,7 +194,7 @@ func (s *Sanitizer) redactViolations(input string, violations []detector.Violati
 		replacement := s.getReplacementText(v)
 
 		// Only replace BLOCK and WARN severity violations
-		if v.Severity == "BLOCK" || v.Severity == "WARN" {
+		if v.Severity == patterns.SeverityBlock || v.Severity == patterns.SeverityWarn {
 			// Safety check: ensure position is valid
 			if v.Position >= 0 && v.End <= len(result) && v.Position < v.End {
 				result = result[:v.Position] + replacement + result[v.End:]
@@ -225,13 +226,13 @@ func (s *Sanitizer) tokenizeViolationsWithCount(input string, violations []detec
 	tokenizedCount := 0
 
 	for _, v := range sorted {
-		if v.Severity != "BLOCK" && v.Severity != "WARN" {
+		if v.Severity != patterns.SeverityBlock && v.Severity != patterns.SeverityWarn {
 			continue
 		}
 
 		var replacement string
 		switch v.Type {
-		case "credential":
+		case patterns.TypeCredential:
 			replacement = s.getRedactionLabel(v.Pattern, v.Type)
 		default:
 			token, err := s.tokenizer.Generate(v, vault)
@@ -253,13 +254,13 @@ func (s *Sanitizer) tokenizeViolationsWithCount(input string, violations []detec
 // getReplacementText returns the replacement text for a violation based on severity
 func (s *Sanitizer) getReplacementText(v detector.Violation) string {
 	switch v.Severity {
-	case "BLOCK":
+	case patterns.SeverityBlock:
 		// For BLOCK severity, use specific redaction based on pattern type
 		return s.getRedactionLabel(v.Pattern, v.Type)
-	case "WARN":
+	case patterns.SeverityWarn:
 		// For WARN severity, use a generic warning label
 		return fmt.Sprintf("[WARNING_%s]", strings.ToUpper(v.Pattern))
-	case "LOG":
+	case patterns.SeverityLog:
 		// For LOG severity, don't redact (return original matched text)
 		return v.Matched
 	default:
@@ -271,28 +272,28 @@ func (s *Sanitizer) getReplacementText(v detector.Violation) string {
 func (s *Sanitizer) getRedactionLabel(patternName, patternType string) string {
 	// Map common pattern names to user-friendly labels
 	labels := map[string]string{
-		"openai_api_key":      "[REDACTED_API_KEY]",
-		"anthropic_api_key":   "[REDACTED_API_KEY]",
-		"google_api_key":      "[REDACTED_API_KEY]",
-		"aws_access_key":      "[REDACTED_AWS_KEY]",
-		"postgres_connection": "[REDACTED_DB_CONNECTION]",
-		"mongodb_connection":  "[REDACTED_DB_CONNECTION]",
-		"mysql_connection":    "[REDACTED_DB_CONNECTION]",
-		"jwt_token":           "[REDACTED_TOKEN]",
-		"email":               "[REDACTED_EMAIL]",
-		"nigerian_bvn":        "[REDACTED_BVN]",
-		"nigerian_phone":      "[REDACTED_PHONE]",
-		"nigerian_account":    "[REDACTED_ACCOUNT]",
-		"kenyan_phone":        "[REDACTED_PHONE]",
-		"mpesa_code":          "[REDACTED_MPESA]",
-		"south_african_id":    "[REDACTED_ID]",
-		"south_african_phone": "[REDACTED_PHONE]",
-		"ghanaian_phone":      "[REDACTED_PHONE]",
-		"credit_card":         "[REDACTED_CARD]",
-		"iban":                "[REDACTED_IBAN]",
-		"swift_code":          "[REDACTED_SWIFT]",
-		"ssh_private_key":     "[REDACTED_PRIVATE_KEY]",
-		"password_var":        "[REDACTED_PASSWORD]",
+		patterns.PatternOpenAIAPIKey:      "[REDACTED_API_KEY]",
+		patterns.PatternAnthropicAPIKey:   "[REDACTED_API_KEY]",
+		patterns.PatternGoogleAPIKey:      "[REDACTED_API_KEY]",
+		patterns.PatternAWSAccessKey:      "[REDACTED_AWS_KEY]",
+		patterns.PatternPostgresConn:      "[REDACTED_DB_CONNECTION]",
+		patterns.PatternMongoDBConn:       "[REDACTED_DB_CONNECTION]",
+		patterns.PatternMySQLConn:         "[REDACTED_DB_CONNECTION]",
+		patterns.PatternJWTToken:          "[REDACTED_TOKEN]",
+		patterns.PatternEmail:             "[REDACTED_EMAIL]",
+		patterns.PatternNigerianBVN:       "[REDACTED_BVN]",
+		patterns.PatternNigerianPhone:     "[REDACTED_PHONE]",
+		patterns.PatternNigerianAccount:   "[REDACTED_ACCOUNT]",
+		patterns.PatternKenyanPhone:       "[REDACTED_PHONE]",
+		patterns.PatternMpesaCode:         "[REDACTED_MPESA]",
+		patterns.PatternSouthAfricanID:    "[REDACTED_ID]",
+		patterns.PatternSouthAfricanPhone: "[REDACTED_PHONE]",
+		patterns.PatternGhanaianPhone:     "[REDACTED_PHONE]",
+		patterns.PatternCreditCard:        "[REDACTED_CARD]",
+		patterns.PatternIBAN:              "[REDACTED_IBAN]",
+		patterns.PatternSwiftCode:         "[REDACTED_SWIFT]",
+		patterns.PatternSSHPrivateKey:     "[REDACTED_PRIVATE_KEY]",
+		patterns.PatternPasswordVar:       "[REDACTED_PASSWORD]",
 	}
 
 	// Return specific label if available
@@ -302,13 +303,13 @@ func (s *Sanitizer) getRedactionLabel(patternName, patternType string) string {
 
 	// Fallback to generic label based on type
 	switch patternType {
-	case "pii":
+	case patterns.TypePII:
 		return "[REDACTED_PII]"
-	case "credential":
+	case patterns.TypeCredential:
 		return "[REDACTED_CREDENTIAL]"
-	case "financial":
+	case patterns.TypeFinancial:
 		return "[REDACTED_FINANCIAL]"
-	case "business_intelligence":
+	case patterns.TypeBusinessIntelligence:
 		return "[REDACTED_BUSINESS_DATA]"
 	default:
 		return "[REDACTED]"
@@ -319,7 +320,7 @@ func (s *Sanitizer) getRedactionLabel(patternName, patternType string) string {
 func (s *Sanitizer) countRedacted(violations []detector.Violation) int {
 	count := 0
 	for _, v := range violations {
-		if v.Severity == "BLOCK" || v.Severity == "WARN" {
+		if v.Severity == patterns.SeverityBlock || v.Severity == patterns.SeverityWarn {
 			count++
 		}
 	}

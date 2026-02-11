@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"eko/internal/core/detector"
+	"eko/internal/core/patterns"
 )
 
 const resolverSessionID = "eko_c7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
@@ -18,8 +19,8 @@ func TestResolveResponseWithSubTokenFragments(t *testing.T) {
 
 	tok := NewTokenizer()
 	violation := detector.Violation{
-		Type:    "pii",
-		Pattern: "email",
+		Type:    patterns.TypePII,
+		Pattern: patterns.PatternEmail,
 		Matched: "eko@gmail.com",
 	}
 	token, err := tok.Generate(violation, vault)

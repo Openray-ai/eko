@@ -141,19 +141,19 @@ func TestEndToEnd_RealWorldScenario(t *testing.T) {
 		{
 			name:     "Database connection leak",
 			input:    "Debug this error: postgres://admin:SecureP@ss123@prod-db.company.com",
-			mustFind: []string{"postgres_connection"},
+			mustFind: []string{patterns.PatternPostgresConn},
 			mustHide: []string{"SecureP@ss123", "prod-db.company.com"},
 		},
 		{
 			name:     "BVN and account leak",
 			input:    "Analyze customer feedback from BVN 12345678901 and account 0123456789",
-			mustFind: []string{"nigerian_bvn", "nigerian_account"},
+			mustFind: []string{patterns.PatternNigerianBVN, patterns.PatternNigerianAccount},
 			mustHide: []string{"12345678901", "0123456789"},
 		},
 		{
 			name:     "Email warning",
 			input:    "Contact support at support@example.com for help",
-			mustFind: []string{"email"},
+			mustFind: []string{patterns.PatternEmail},
 			mustHide: []string{"support@example.com"},
 		},
 	}

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"eko/internal/core/patterns"
+
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -40,21 +42,21 @@ func TestChatCompletionsProxy(t *testing.T) {
 			message:            "My email is john.doe@example.com. Can you help me?",
 			expectViolations:   true,
 			minViolationCount:  1,
-			expectedViolations: []string{"pii"},
+			expectedViolations: []string{patterns.TypePII},
 		},
 		{
 			name:               "Sanitize MongoDB connection string",
 			message:            "Connect to mongodb://admin:password123@localhost:27017/mydb",
 			expectViolations:   true,
 			minViolationCount:  1,
-			expectedViolations: []string{"credential"},
+			expectedViolations: []string{patterns.TypeCredential},
 		},
 		{
 			name:               "Sanitize multiple violations",
 			message:            "My email is test@example.com and database is postgres://user:pass@localhost:5432/db",
 			expectViolations:   true,
 			minViolationCount:  2,
-			expectedViolations: []string{"pii", "credential"},
+			expectedViolations: []string{patterns.TypePII, patterns.TypeCredential},
 		},
 		{
 			name:              "Clean message with no sensitive data",

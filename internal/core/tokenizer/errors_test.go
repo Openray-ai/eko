@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"eko/internal/core/detector"
+	"eko/internal/core/patterns"
 )
 
 func TestErrors(t *testing.T) {
@@ -79,8 +80,8 @@ func TestErrVaultFullWhenMaxTokensExceeded(t *testing.T) {
 	}
 
 	tokenizer := NewTokenizer()
-	first := detector.Violation{Matched: "john@acme.com", Pattern: "email"}
-	second := detector.Violation{Matched: "jane@acme.com", Pattern: "email"}
+	first := detector.Violation{Matched: "john@acme.com", Pattern: patterns.PatternEmail}
+	second := detector.Violation{Matched: "jane@acme.com", Pattern: patterns.PatternEmail}
 
 	if _, err := tokenizer.Generate(first, vault); err != nil {
 		t.Fatalf("expected first tokenization to succeed, got error: %v", err)
