@@ -1,6 +1,9 @@
 package tokenizer
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 type Resolver struct {
 	vaultManager *VaultManager
@@ -25,9 +28,17 @@ func (r *Resolver) ResolveResponse(body []byte, sessionID string) ([]byte, error
 		return body, nil
 	}
 
+	tokens := make([]string, 0, len(reverse))
+	for token := range reverse {
+		tokens = append(tokens, token)
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		return len(tokens[i]) > len(tokens[j])
+	})
+
 	result := string(body)
-	for token, original := range reverse {
-		result = strings.ReplaceAll(result, token, original)
+	for _, token := range tokens {
+		result = strings.ReplaceAll(result, token, reverse[token])
 	}
 
 	return []byte(result), nil

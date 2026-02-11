@@ -286,6 +286,40 @@ func TestTokenizerRejectsCredentials(t *testing.T) {
 	}
 }
 
+func TestEmailSubTokens(t *testing.T) {
+	subs := emailSubTokens("eko@gmail.com", "usa@examp.eac")
+	if subs == nil {
+		t.Fatal("expected non-nil sub-tokens")
+	}
+
+	expected := map[string]string{
+		"examp.eac": "gmail.com",
+		"eac":       "com",
+		"usa":       "eko",
+		"examp":     "gmail",
+	}
+
+	for tokenFrag, wantOrig := range expected {
+		got, ok := subs[tokenFrag]
+		if !ok {
+			t.Errorf("missing sub-token %q", tokenFrag)
+			continue
+		}
+		if got != wantOrig {
+			t.Errorf("sub-token[%q] = %q, want %q", tokenFrag, got, wantOrig)
+		}
+	}
+
+	if len(subs) != len(expected) {
+		t.Errorf("sub-token count = %d, want %d", len(subs), len(expected))
+	}
+
+	// Invalid emails return nil
+	if subs := emailSubTokens("noatsign", "noatsign"); subs != nil {
+		t.Errorf("expected nil for emails without @")
+	}
+}
+
 func assertClassPreserved(t *testing.T, original, token string) {
 	origRunes := []rune(original)
 	tokenRunes := []rune(token)

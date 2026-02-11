@@ -6,9 +6,10 @@ import (
 )
 
 type TokenMap struct {
-	forward  map[string]string
-	reverse  map[string]string
-	counters map[string]uint64
+	forward   map[string]string
+	reverse   map[string]string
+	counters  map[string]uint64
+	subtokens map[string]string
 }
 
 type Vault struct {
@@ -99,6 +100,7 @@ func (vm *VaultManager) GetOrCreate(sessionID string) (*Vault, error) {
 	vm.vaults[sessionID] = vault
 	return vault, nil
 }
+
 
 func (vm *VaultManager) Get(sessionID string) (*Vault, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
@@ -198,6 +200,27 @@ func (v *Vault) Store(original, token string) error {
 	return nil
 }
 
+func (v *Vault) StoreSubTokens(mappings map[string]string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	for fragment, original := range mappings {
+		if fragment == original {
+			continue
+		}
+		if _, exists := v.tokens.reverse[fragment]; exists {
+			continue
+		}
+		if existing, exists := v.tokens.subtokens[fragment]; exists {
+			if existing != original {
+				delete(v.tokens.subtokens, fragment)
+			}
+			continue
+		}
+		v.tokens.subtokens[fragment] = original
+	}
+}
+
 func (v *Vault) GetToken(original string) (string, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -218,11 +241,14 @@ func (v *Vault) ReverseTokens() map[string]string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
-	if len(v.tokens.reverse) == 0 {
+	if len(v.tokens.reverse) == 0 && len(v.tokens.subtokens) == 0 {
 		return nil
 	}
 
-	reverse := make(map[string]string, len(v.tokens.reverse))
+	reverse := make(map[string]string, len(v.tokens.reverse)+len(v.tokens.subtokens))
+	for fragment, original := range v.tokens.subtokens {
+		reverse[fragment] = original
+	}
 	for token, original := range v.tokens.reverse {
 		reverse[token] = original
 	}
@@ -241,9 +267,10 @@ func newVault(sessionID string, now time.Time, ttl time.Duration, maxTokens int)
 		sessionID: sessionID,
 		expiresAt: now.Add(ttl),
 		tokens: TokenMap{
-			forward:  make(map[string]string),
-			reverse:  make(map[string]string),
-			counters: make(map[string]uint64),
+			forward:   make(map[string]string),
+			reverse:   make(map[string]string),
+			counters:  make(map[string]uint64),
+			subtokens: make(map[string]string),
 		},
 		inflight:  make(map[string]chan struct{}),
 		maxTokens: maxTokens,

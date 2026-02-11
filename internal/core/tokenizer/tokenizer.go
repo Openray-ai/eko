@@ -99,6 +99,12 @@ func (t *Tokenizer) Generate(v detector.Violation, vault *Vault) (string, error)
 		close(wait)
 		vault.mu.Unlock()
 
+		if v.Pattern == "email" {
+			if subs := emailSubTokens(v.Matched, token); len(subs) > 0 {
+				vault.StoreSubTokens(subs)
+			}
+		}
+
 		return token, nil
 	}
 }
@@ -254,6 +260,38 @@ func generateEmailToken(original string, counter uint64) (string, error) {
 	}
 
 	return localWithCounter + "@" + domainPart, nil
+}
+
+func emailSubTokens(original, token string) map[string]string {
+	origAt := strings.Index(original, "@")
+	tokenAt := strings.Index(token, "@")
+	if origAt <= 0 || tokenAt <= 0 || origAt >= len(original)-1 || tokenAt >= len(token)-1 {
+		return nil
+	}
+
+	origLocal := original[:origAt]
+	origDomain := original[origAt+1:]
+	tokenLocal := token[:tokenAt]
+	tokenDomain := token[tokenAt+1:]
+
+	subs := make(map[string]string, 4)
+
+	// Full domain: e.g. "examp.eac" -> "gmail.com"
+	subs[tokenDomain] = origDomain
+
+	// TLD: e.g. "eac" -> "com"
+	origDot := strings.LastIndex(origDomain, ".")
+	tokenDot := strings.LastIndex(tokenDomain, ".")
+	if origDot > 0 && tokenDot > 0 {
+		subs[tokenDomain[tokenDot+1:]] = origDomain[origDot+1:]
+		// Domain name: e.g. "examp" -> "gmail"
+		subs[tokenDomain[:tokenDot]] = origDomain[:origDot]
+	}
+
+	// Local part: e.g. "usa" -> "eko"
+	subs[tokenLocal] = origLocal
+
+	return subs
 }
 
 func generateClassPreservingToken(original string, counter uint64) (string, error) {

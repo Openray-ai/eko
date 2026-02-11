@@ -149,6 +149,106 @@ func TestVaultManagerCleanupRemovesExpired(t *testing.T) {
 	}
 }
 
+func TestVaultStoreSubTokens(t *testing.T) {
+	manager := NewVaultManager(time.Minute)
+	vault, err := manager.GetOrCreate(sampleSessionID)
+	if err != nil {
+		t.Fatalf("expected vault creation to succeed, got error: %v", err)
+	}
+
+	// Store a primary token first
+	if err := vault.Store("eko@gmail.com", "usa@examp.eac"); err != nil {
+		t.Fatalf("expected store to succeed, got error: %v", err)
+	}
+
+	// Store sub-tokens
+	vault.StoreSubTokens(map[string]string{
+		"examp.eac": "gmail.com",
+		"eac":       "com",
+		"usa":       "eko",
+		"examp":     "gmail",
+	})
+
+	// Verify sub-tokens are retrievable via ReverseTokens
+	reverse := vault.ReverseTokens()
+	if reverse["eac"] != "com" {
+		t.Fatalf("sub-token reverse[%q] = %q, want %q", "eac", reverse["eac"], "com")
+	}
+	if reverse["examp"] != "gmail" {
+		t.Fatalf("sub-token reverse[%q] = %q, want %q", "examp", reverse["examp"], "gmail")
+	}
+
+	// Skip entries where fragment == original
+	vault.StoreSubTokens(map[string]string{
+		"same": "same",
+	})
+	reverse = vault.ReverseTokens()
+	if _, exists := reverse["same"]; exists {
+		t.Fatalf("expected identical fragment to be skipped")
+	}
+
+	// Conflict: store a different mapping for an existing sub-token
+	vault.StoreSubTokens(map[string]string{
+		"eac": "org", // conflicts with existing "eac" -> "com"
+	})
+	reverse = vault.ReverseTokens()
+	if _, exists := reverse["eac"]; exists {
+		t.Fatalf("expected conflicting sub-token to be deleted")
+	}
+
+	// Skip entries that collide with primary reverse tokens
+	vault.StoreSubTokens(map[string]string{
+		"usa@examp.eac": "should-be-skipped",
+	})
+	reverse = vault.ReverseTokens()
+	if reverse["usa@examp.eac"] != "eko@gmail.com" {
+		t.Fatalf("primary token should take precedence, got %q", reverse["usa@examp.eac"])
+	}
+}
+
+func TestVaultReverseTokensIncludesSubTokens(t *testing.T) {
+	manager := NewVaultManager(time.Minute)
+	vault, err := manager.GetOrCreate(sampleSessionID)
+	if err != nil {
+		t.Fatalf("expected vault creation to succeed, got error: %v", err)
+	}
+
+	// Store primary token
+	if err := vault.Store("eko@gmail.com", "usa@examp.eac"); err != nil {
+		t.Fatalf("expected store to succeed, got error: %v", err)
+	}
+
+	// Store sub-tokens
+	vault.StoreSubTokens(map[string]string{
+		"eac": "com",
+		"usa": "eko",
+	})
+
+	reverse := vault.ReverseTokens()
+
+	// Should contain primary token
+	if reverse["usa@examp.eac"] != "eko@gmail.com" {
+		t.Fatalf("expected primary token in reverse map")
+	}
+
+	// Should contain sub-tokens
+	if reverse["eac"] != "com" {
+		t.Fatalf("expected sub-token 'eac' in reverse map")
+	}
+	if reverse["usa"] != "eko" {
+		t.Fatalf("expected sub-token 'usa' in reverse map")
+	}
+
+	// Primary takes precedence: store a sub-token that collides with a primary key
+	if err := vault.Store("real-original", "usa"); err != nil {
+		t.Fatalf("expected store to succeed, got error: %v", err)
+	}
+	reverse = vault.ReverseTokens()
+	if reverse["usa"] != "real-original" {
+		t.Fatalf("primary token should take precedence over sub-token, got %q", reverse["usa"])
+	}
+}
+
 func TestVaultConcurrentAccess(t *testing.T) {
 	manager := NewVaultManager(time.Minute)
 	vault, err := manager.GetOrCreate(sampleSessionID)
