@@ -84,16 +84,35 @@ make bench-save
 | 100 KB | 3.75 ms | 27 MB/s | |
 | 1 MB | 34.6 ms | 29 MB/s | Regex-bound |
 
-### Resolver (O(n*m) strings.ReplaceAll)
+### Resolver
 
-| Tokens | Body Size | Latency | Throughput | Notes |
-|--------|-----------|---------|------------|-------|
-| 1 | 10 KB | 18 us | 543 MB/s | |
-| 10 | 10 KB | 128 us | 80 MB/s | |
-| 100 | 10 KB | 1.75 ms | 6.9 MB/s | |
-| 500 | 10 KB | 16 ms | 1.3 MB/s | **Latency wall** |
-| 1000 | 10 KB | 51 ms | 0.64 MB/s | Unacceptable for response path |
-| 10 | 1 MB | 11.9 ms | 84 MB/s | Body size scales linearly |
+Replaced the O(n\*m) `strings.ReplaceAll` loop with a single-pass `strings.NewReplacer` (Aho-Corasick trie). This also eliminated a cascading replacement bug where replacement text containing a shorter token would be re-matched by later passes.
+
+#### Before (O(n\*m) strings.ReplaceAll loop)
+
+| Tokens | Body Size | Latency | Throughput | Allocs | Notes |
+|--------|-----------|---------|------------|--------|-------|
+| 1 | 10 KB | 18 us | 543 MB/s | 8 | |
+| 10 | 10 KB | 128 us | 80 MB/s | 26 | |
+| 50 | 10 KB | 769 us | 14 MB/s | 106 | |
+| 100 | 10 KB | 1.75 ms | 6.9 MB/s | 205 | |
+| 500 | 10 KB | 16.1 ms | 1.3 MB/s | 1006 | **Latency wall** |
+| 1000 | 10 KB | 51.5 ms | 0.64 MB/s | 2011 | Unacceptable for response path |
+| 10 | 1 MB | 11.9 ms | 84 MB/s | 27 | Body size scales linearly |
+
+#### After (single-pass strings.NewReplacer)
+
+| Tokens | Body Size | Latency | Throughput | Allocs | Speedup |
+|--------|-----------|---------|------------|--------|---------|
+| 1 | 10 KB | 24 us | 421 MB/s | 18 | 0.8x (trie build overhead) |
+| 10 | 10 KB | 26 us | 389 MB/s | 38 | **4.9x** |
+| 50 | 10 KB | 42 us | 258 MB/s | 130 | **18x** |
+| 100 | 10 KB | 54 us | 222 MB/s | 240 | **32x** |
+| 500 | 10 KB | 172 us | 124 MB/s | 1126 | **94x** |
+| 1000 | 10 KB | 329 us | 100 MB/s | 2230 | **157x** |
+| 10 | 1 MB | 2.2 ms | 448 MB/s | 38 | **5.4x** |
+
+The scaling is now dominated by body size (O(m)), not token count. At 1000 tokens: **51ms down to 329us**.
 
 ### Memory Footprint
 
@@ -105,7 +124,7 @@ make bench-save
 
 ## Key Findings
 
-1. **Resolver is the scalability bottleneck.** O(n*m) `strings.ReplaceAll` loop scans and copies the entire body per token. At 500 tokens the response path spends 16ms just on de-tokenization. A `strings.Replacer` or trie-based approach would collapse this to O(m) in one pass.
+1. **Resolver bottleneck fixed.** The original O(n\*m) `strings.ReplaceAll` loop was the scalability wall (51ms at 1000 tokens). Replaced with `strings.NewReplacer` which builds an Aho-Corasick trie for single-pass O(m) resolution. Result: 157x faster at 1000 tokens (329us). Also eliminated a cascading replacement bug.
 
 2. **Default limits are unreachable.** 10K vaults x 100K tokens/vault = 1 billion theoretical tokens, but at ~333 bytes/token the 512MB container OOMs at ~1.2M total tokens. The defaults should be lowered to match the memory reality.
 
@@ -113,7 +132,7 @@ make bench-save
 
 4. **Token generation is allocation-heavy.** Email tokenization allocates 22 objects per call. For high-density PII inputs (50+ emails), pooling `[]rune` buffers or pre-sizing maps could reduce GC pressure.
 
-5. **ReverseTokens copies the full map on every resolve.** At 10K tokens this costs 349 us and 656 KB per call, compounding with the resolver's O(n*m) loop.
+5. **ReverseTokens copies the full map on every resolve.** At 10K tokens this costs 349 us and 656 KB per call. Now that the resolver itself is O(m), this map copy is the next optimization target for sessions with many tokens.
 
 6. **Detection goroutine overhead.** On small inputs (<1 KB), goroutine spawn/join cost likely exceeds the regex work itself. Pattern count scaling is sub-linear (1 pattern = 211 us, 50 patterns = 1.23 ms).
 
