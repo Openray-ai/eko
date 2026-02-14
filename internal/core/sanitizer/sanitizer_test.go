@@ -280,6 +280,151 @@ func TestSanitizer_Sanitize_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestSanitizer_Sanitize_DOBRedaction(t *testing.T) {
+	det := detector.New()
+	dobPattern := &patterns.CompiledPattern{
+		Name:        patterns.PatternDateOfBirth,
+		Regex:       regexp.MustCompile(`\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Date pattern",
+	}
+	det.LoadPattern(dobPattern)
+
+	s := New(det)
+
+	input := "DOB: 1988-04-12"
+	result, err := s.Sanitize(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(result.SanitizedPrompt, "1988-04-12") {
+		t.Error("DOB should have been redacted")
+	}
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_DOB]") {
+		t.Errorf("expected [REDACTED_DOB], got: %s", result.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_Sanitize_PostalCodeRedaction(t *testing.T) {
+	det := detector.New()
+	postalPattern := &patterns.CompiledPattern{
+		Name:        patterns.PatternPostalCode,
+		Regex:       regexp.MustCompile(`(?i)(?:postal[\s._-]*code|zip[\s._-]*code|zip|postcode)\s*[:=]?\s*[A-Za-z0-9]{3,10}(?:[\s-][A-Za-z0-9]{2,4})?`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Postal or ZIP code with contextual keyword",
+	}
+	det.LoadPattern(postalPattern)
+
+	s := New(det)
+
+	input := "Postal Code: 100271"
+	result, err := s.Sanitize(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(result.SanitizedPrompt, "100271") {
+		t.Error("postal code should have been redacted")
+	}
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_POSTAL_CODE]") {
+		t.Errorf("expected [REDACTED_POSTAL_CODE], got: %s", result.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_Sanitize_EmployeeIDRedaction(t *testing.T) {
+	det := detector.New()
+	empPattern := &patterns.CompiledPattern{
+		Name:        "employee_id",
+		Regex:       regexp.MustCompile(`(?i)\b(?:emp|employee|staff|personnel)[-_]?\d{3,10}\b`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Employee ID",
+	}
+	det.LoadPattern(empPattern)
+
+	s := New(det)
+
+	input := "Employee ID: EMP-44219"
+	result, err := s.Sanitize(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(result.SanitizedPrompt, "EMP-44219") {
+		t.Error("employee ID should have been redacted")
+	}
+	// employee_id is a custom pattern with no specific label, falls back to [REDACTED_PII]
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_PII]") {
+		t.Errorf("expected [REDACTED_PII], got: %s", result.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_Sanitize_CombinedPIIInput(t *testing.T) {
+	det := detector.New()
+
+	testPatterns := []*patterns.CompiledPattern{
+		{
+			Name:        patterns.PatternDateOfBirth,
+			Regex:       regexp.MustCompile(`\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b`),
+			Type:        patterns.TypePII,
+			Severity:    "BLOCK",
+			Description: "Date pattern",
+		},
+		{
+			Name:        patterns.PatternPostalCode,
+			Regex:       regexp.MustCompile(`(?i)(?:postal[\s._-]*code|zip[\s._-]*code|zip|postcode)\s*[:=]?\s*[A-Za-z0-9]{3,10}(?:[\s-][A-Za-z0-9]{2,4})?`),
+			Type:        patterns.TypePII,
+			Severity:    "BLOCK",
+			Description: "Postal or ZIP code",
+		},
+		{
+			Name:        "employee_id",
+			Regex:       regexp.MustCompile(`(?i)\b(?:emp|employee|staff|personnel)[-_]?\d{3,10}\b`),
+			Type:        patterns.TypePII,
+			Severity:    "BLOCK",
+			Description: "Employee ID",
+		},
+	}
+	det.LoadPatterns(testPatterns)
+
+	s := New(det)
+
+	input := "DOB: 1988-04-12, Postal Code: 100271, Employee ID: EMP-44219"
+	result, err := s.Sanitize(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Safe {
+		t.Error("expected Safe to be false")
+	}
+
+	if strings.Contains(result.SanitizedPrompt, "1988-04-12") {
+		t.Error("DOB should have been redacted")
+	}
+	if strings.Contains(result.SanitizedPrompt, "100271") {
+		t.Error("postal code should have been redacted")
+	}
+	if strings.Contains(result.SanitizedPrompt, "EMP-44219") {
+		t.Error("employee ID should have been redacted")
+	}
+
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_DOB]") {
+		t.Errorf("expected [REDACTED_DOB] in output, got: %s", result.SanitizedPrompt)
+	}
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_POSTAL_CODE]") {
+		t.Errorf("expected [REDACTED_POSTAL_CODE] in output, got: %s", result.SanitizedPrompt)
+	}
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_PII]") {
+		t.Errorf("expected [REDACTED_PII] in output, got: %s", result.SanitizedPrompt)
+	}
+
+	t.Logf("Sanitized: %s", result.SanitizedPrompt)
+}
+
 func TestSanitizer_GetRedactionLabel(t *testing.T) {
 	s := New(detector.New())
 
@@ -292,6 +437,8 @@ func TestSanitizer_GetRedactionLabel(t *testing.T) {
 		{patterns.PatternOpenAIAPIKey, patterns.TypeCredential, "[REDACTED_API_KEY]"},
 		{patterns.PatternNigerianBVN, patterns.TypePII, "[REDACTED_BVN]"},
 		{patterns.PatternCreditCard, patterns.TypeFinancial, "[REDACTED_CARD]"},
+		{patterns.PatternDateOfBirth, patterns.TypePII, "[REDACTED_DOB]"},
+		{patterns.PatternPostalCode, patterns.TypePII, "[REDACTED_POSTAL_CODE]"},
 		{"unknown_pattern", patterns.TypePII, "[REDACTED_PII]"},
 		{"unknown_pattern", patterns.TypeCredential, "[REDACTED_CREDENTIAL]"},
 		{"unknown_pattern", patterns.TypeFinancial, "[REDACTED_FINANCIAL]"},

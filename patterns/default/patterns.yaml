@@ -143,3 +143,16 @@ patterns:
     type: "credential"
     severity: "BLOCK"
     description: "Password in environment variable or config"
+
+  # Context-Aware PII
+  - name: "date_of_birth"
+    regex: "\\b\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}\\b|\\b\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{4}\\b"
+    type: "pii"
+    severity: "BLOCK"
+    description: "Date pattern (date of birth or similar)"
+
+  - name: "postal_code"
+    regex: "(?i)(?:postal[\\s._-]*code|zip[\\s._-]*code|zip|postcode)\\s*[:=]?\\s*[A-Za-z0-9]{3,10}(?:[\\s-][A-Za-z0-9]{2,4})?"
+    type: "pii"
+    severity: "BLOCK"
+    description: "Postal or ZIP code with contextual keyword"
