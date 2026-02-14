@@ -64,6 +64,8 @@ const (
 	PatternJWTToken          = "jwt_token"
 	PatternSSHPrivateKey     = "ssh_private_key"
 	PatternPasswordVar       = "password_var"
+	PatternDateOfBirth       = "date_of_birth"
+	PatternPostalCode        = "postal_code"
 
 	// PhoneSuffix is the common suffix for phone-type patterns, used for
 	// dynamic generator selection in the tokenizer.

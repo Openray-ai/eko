@@ -385,6 +385,129 @@ func TestDetector_Overlaps(t *testing.T) {
 	}
 }
 
+func TestDetector_Detect_DateOfBirth(t *testing.T) {
+	d := New()
+
+	dobPattern := &patterns.CompiledPattern{
+		Name:        patterns.PatternDateOfBirth,
+		Regex:       regexp.MustCompile(`\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Date pattern (date of birth or similar)",
+	}
+	d.LoadPattern(dobPattern)
+
+	tests := []struct {
+		name    string
+		input   string
+		matches bool
+	}{
+		{"YYYY-MM-DD", "DOB: 1988-04-12", true},
+		{"DD/MM/YYYY", "Born on 12/04/1988", true},
+		{"MM.DD.YYYY", "Date: 04.12.1988", true},
+		{"YYYY/M/D", "Date: 1988/4/12", true},
+		{"no match plain text", "Hello world", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			violations, err := d.Detect(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.matches && len(violations) == 0 {
+				t.Errorf("expected DOB match in %q, got none", tt.input)
+			}
+			if !tt.matches && len(violations) > 0 {
+				t.Errorf("expected no DOB match in %q, got %d", tt.input, len(violations))
+			}
+		})
+	}
+}
+
+func TestDetector_Detect_PostalCode(t *testing.T) {
+	d := New()
+
+	postalPattern := &patterns.CompiledPattern{
+		Name:        patterns.PatternPostalCode,
+		Regex:       regexp.MustCompile(`(?i)(?:postal[\s._-]*code|zip[\s._-]*code|zip|postcode)\s*[:=]?\s*[A-Za-z0-9]{3,10}(?:[\s-][A-Za-z0-9]{2,4})?`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Postal or ZIP code with contextual keyword",
+	}
+	d.LoadPattern(postalPattern)
+
+	tests := []struct {
+		name    string
+		input   string
+		matches bool
+	}{
+		{"postal code numeric", "Postal Code: 100271", true},
+		{"zip code", "zip code: 90210", true},
+		{"ZIP short", "ZIP: 10001-4321", true},
+		{"postcode UK", "Postcode: SW1A 1AA", true},
+		{"bare number no keyword", "100271", false},
+		{"no match plain text", "Hello world", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			violations, err := d.Detect(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.matches && len(violations) == 0 {
+				t.Errorf("expected postal code match in %q, got none", tt.input)
+			}
+			if !tt.matches && len(violations) > 0 {
+				t.Errorf("expected no postal code match in %q, got %d", tt.input, len(violations))
+			}
+		})
+	}
+}
+
+func TestDetector_Detect_EmployeeID(t *testing.T) {
+	d := New()
+
+	empPattern := &patterns.CompiledPattern{
+		Name:        "employee_id",
+		Regex:       regexp.MustCompile(`(?i)\b(?:emp|employee|staff|personnel)[-_]?\d{3,10}\b`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Employee ID",
+	}
+	d.LoadPattern(empPattern)
+
+	tests := []struct {
+		name    string
+		input   string
+		matches bool
+	}{
+		{"EMP-nnnnn", "Employee ID: EMP-44219", true},
+		{"emp_nnnnn", "ID is emp_12345", true},
+		{"employee followed by digits", "employee12345", true},
+		{"staff ID", "staff-001", true},
+		{"personnel ID", "personnel999999", true},
+		{"no match plain text", "Hello world", false},
+		{"too few digits", "EMP-12", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			violations, err := d.Detect(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.matches && len(violations) == 0 {
+				t.Errorf("expected employee ID match in %q, got none", tt.input)
+			}
+			if !tt.matches && len(violations) > 0 {
+				t.Errorf("expected no employee ID match in %q, got %d", tt.input, len(violations))
+			}
+		})
+	}
+}
+
 func TestDetector_Detect_Positions(t *testing.T) {
 	d := New()
 
