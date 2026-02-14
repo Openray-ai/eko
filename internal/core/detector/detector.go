@@ -34,8 +34,10 @@ func New() *Detector {
 func (d *Detector) Detect(input string) ([]Violation, error) {
 	d.mu.RLock()
 	patternList := make([]*patterns.CompiledPattern, 0, len(d.patterns))
+	patternMap := make(map[string]*patterns.CompiledPattern, len(d.patterns))
 	for _, p := range d.patterns {
 		patternList = append(patternList, p)
+		patternMap[p.Name] = p
 	}
 	d.mu.RUnlock()
 
@@ -69,6 +71,7 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 	for violations := range violationsChan {
 		allViolations = append(allViolations, violations...)
 	}
+	allViolations = append(allViolations, d.detectAdvanced(input, patternMap)...)
 
 	// Deduplicate overlapping violations
 	deduped := d.deduplicateViolations(allViolations)
@@ -128,7 +131,19 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		if violations[i].Position != violations[j].Position {
 			return violations[i].Position < violations[j].Position
 		}
-		return d.getSeverityPriority(violations[i].Severity) > d.getSeverityPriority(violations[j].Severity)
+		priorityI := d.getSeverityPriority(violations[i].Severity)
+		priorityJ := d.getSeverityPriority(violations[j].Severity)
+		if priorityI != priorityJ {
+			return priorityI > priorityJ
+		}
+		typePriorityI := d.getTypePriority(violations[i].Type)
+		typePriorityJ := d.getTypePriority(violations[j].Type)
+		if typePriorityI != typePriorityJ {
+			return typePriorityI > typePriorityJ
+		}
+		lenI := violations[i].End - violations[i].Position
+		lenJ := violations[j].End - violations[j].Position
+		return lenI > lenJ
 	})
 
 	// Remove overlapping violations
@@ -164,6 +179,19 @@ func (d *Detector) getSeverityPriority(severity string) int {
 	case "WARN":
 		return 2
 	case "LOG":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (d *Detector) getTypePriority(patternType string) int {
+	switch patternType {
+	case patterns.TypeCredential:
+		return 3
+	case patterns.TypeFinancial:
+		return 2
+	case patterns.TypePII:
 		return 1
 	default:
 		return 0

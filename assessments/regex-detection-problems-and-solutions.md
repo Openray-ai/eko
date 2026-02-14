@@ -18,6 +18,9 @@ Current key detection relies on strict provider regexes. This misses newer/varia
 Use a layered detection strategy:
 1. Keep strict provider-specific regexes as `BLOCK` (high precision).
 2. Add constrained variant-aware provider regexes (e.g. `sk-proj`, `sk-live`, `sk-test`) as `BLOCK`.
+
+This should not be implemented, as it will cause regex drift. But we solved this by allowing custom patterns to be added by individual organizations using the custom patterns directory.
+
 3. Add generic secret-assignment patterns as `WARN` only.
 4. Add lightweight validators before escalation (`length`, `charset mix`, denylist such as `test`, `dummy`, `example`).
 5. Maintain a regression corpus (true positive + false positive samples) and run it in CI.
