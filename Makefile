@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration test-all clean install lint fmt help docker-build docker-run docker-up docker-down docker-logs docker-test docker-push docker-clean
+.PHONY: build run test test-integration test-all clean install lint fmt help docker-build docker-run docker-up docker-down docker-logs docker-test docker-push docker-clean bench bench-save bench-compare bench-profile-cpu bench-profile-mem bench-memory bench-ceiling
 
 # Binary name
 BINARY_NAME=eko
@@ -158,4 +158,62 @@ help:
 	@echo "  docker-push      - Push image to Docker registry"
 	@echo "  docker-clean     - Remove Docker images and containers"
 	@echo ""
+	@echo "Benchmark targets:"
+	@echo "  bench            - Run all micro-benchmarks with -benchmem -count=5"
+	@echo "  bench-save       - Run benchmarks and save timestamped results"
+	@echo "  bench-compare    - Compare baseline.txt vs current.txt using benchstat"
+	@echo "  bench-profile-cpu - Generate and open CPU profile (pprof)"
+	@echo "  bench-profile-mem - Generate and open memory profile (pprof)"
+	@echo "  bench-memory     - Run memory ceiling tests (TestMemory*)"
+	@echo "  bench-ceiling    - Run 512MB boundary tests (TestMemoryCeiling*)"
+	@echo ""
 	@echo "  help             - Show this help message"
+
+# ---- Benchmark targets ----
+
+BENCH_PKGS=./internal/core/tokenizer/ ./internal/core/detector/ ./internal/core/sanitizer/
+BENCH_DIR=benchmarks
+
+# Run all micro-benchmarks
+bench:
+	@echo "Running micro-benchmarks..."
+	@go test -bench=. -benchmem -count=5 $(BENCH_PKGS)
+
+# Run benchmarks and save timestamped results
+bench-save:
+	@mkdir -p $(BENCH_DIR)
+	@echo "Running benchmarks and saving results..."
+	@go test -bench=. -benchmem -count=5 $(BENCH_PKGS) | tee $(BENCH_DIR)/bench-$$(date +%Y%m%d-%H%M%S).txt
+	@echo "Results saved to $(BENCH_DIR)/"
+
+# Compare baseline vs current using benchstat
+bench-compare:
+	@if [ ! -f $(BENCH_DIR)/baseline.txt ] || [ ! -f $(BENCH_DIR)/current.txt ]; then \
+		echo "Error: $(BENCH_DIR)/baseline.txt and $(BENCH_DIR)/current.txt must both exist."; \
+		echo "  1. Run 'make bench-save' and copy the result to $(BENCH_DIR)/baseline.txt"; \
+		echo "  2. Make changes, run 'make bench-save' and copy to $(BENCH_DIR)/current.txt"; \
+		exit 1; \
+	fi
+	@benchstat $(BENCH_DIR)/baseline.txt $(BENCH_DIR)/current.txt
+
+# Generate and open CPU profile
+bench-profile-cpu:
+	@echo "Generating CPU profile..."
+	@go test -bench=. -benchmem -cpuprofile=$(BENCH_DIR)/cpu.prof ./internal/core/tokenizer/
+	@go tool pprof -http=:8081 $(BENCH_DIR)/cpu.prof
+
+# Generate and open memory profile
+bench-profile-mem:
+	@echo "Generating memory profile..."
+	@go test -bench=. -benchmem -memprofile=$(BENCH_DIR)/mem.prof ./internal/core/tokenizer/
+	@go tool pprof -http=:8081 $(BENCH_DIR)/mem.prof
+
+# Run memory ceiling tests
+bench-memory:
+	@echo "Running memory tests..."
+	@go test -v -run TestMemory -timeout 10m ./benchmarks/
+
+# Run 512MB boundary tests
+bench-ceiling:
+	@echo "Running 512MB ceiling tests..."
+	@go test -v -run TestMemoryCeiling -timeout 30m ./benchmarks/
