@@ -3,6 +3,7 @@ package handlers
 import (
 	"eko/internal/core/sanitizer"
 	"eko/internal/core/tokenizer"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -40,7 +41,11 @@ func (h *SanitizeHandler) Handle(c *gin.Context) {
 
 	result, err := h.sanitizer.SanitizeWithSession(req.Prompt, sessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "sanitization failed"})
+		status := http.StatusInternalServerError
+		if errors.Is(err, tokenizer.ErrSessionStoreUnavailable) || errors.Is(err, tokenizer.ErrSessionStoreConflict) {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{"error": "sanitization failed"})
 		return
 	}
 

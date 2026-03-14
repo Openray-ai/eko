@@ -44,6 +44,8 @@ type ProxyConfig struct {
 	Anthropic ProviderConfig `yaml:"anthropic"`
 	Google    ProviderConfig `yaml:"google"`
 	Behavior  BehaviorConfig `yaml:"behavior"`
+	Redis     RedisConfig    `yaml:"redis"`
+	Crypto    CryptoConfig   `yaml:"crypto"`
 }
 
 // ProviderConfig holds provider-specific configuration
@@ -59,9 +61,49 @@ type BehaviorConfig struct {
 	LogRequests         bool   `yaml:"log_requests"`
 	AddViolationHeaders bool   `yaml:"add_violation_headers"`
 	SanitizationMode    string `yaml:"sanitization_mode"` // redact, tokenize
+	TokenStoreBackend   string `yaml:"token_store_backend"`
 	TokenTTLms          int    `yaml:"token_ttl_ms"`
 	MaxVaults           int    `yaml:"max_vaults"`
 	MaxTokensPerVault   int    `yaml:"max_tokens_per_vault"`
+}
+
+type RedisConfig struct {
+	Addr           string `yaml:"addr"`
+	Username       string `yaml:"username"`
+	Password       string `yaml:"password"`
+	DB             int    `yaml:"db"`
+	KeyPrefix      string `yaml:"key_prefix"`
+	MetaSuffix     string `yaml:"meta_suffix"`
+	PayloadSuffix  string `yaml:"payload_suffix"`
+	PoolSize       int    `yaml:"pool_size"`
+	MinIdleConns   int    `yaml:"min_idle_conns"`
+	DialTimeoutMs  int    `yaml:"dial_timeout_ms"`
+	ReadTimeoutMs  int    `yaml:"read_timeout_ms"`
+	WriteTimeoutMs int    `yaml:"write_timeout_ms"`
+	MaxRetries     int    `yaml:"max_retries"`
+}
+
+type CryptoConfig struct {
+	Provider       string             `yaml:"provider"`
+	ActiveKeyID    string             `yaml:"active_key_id"`
+	LocalMasterKey string             `yaml:"local_master_key"`
+	FallbackKeys   []CryptoKeyConfig  `yaml:"fallback_keys"`
+	VaultTransit   VaultTransitConfig `yaml:"vault_transit"`
+}
+
+type CryptoKeyConfig struct {
+	KeyID     string `yaml:"key_id"`
+	MasterKey string `yaml:"master_key"`
+}
+
+type VaultTransitConfig struct {
+	Address       string `yaml:"address"`
+	Token         string `yaml:"token"`
+	Namespace     string `yaml:"namespace"`
+	Mount         string `yaml:"mount"`
+	KeyName       string `yaml:"key_name"`
+	TimeoutMs     int    `yaml:"timeout_ms"`
+	TLSSkipVerify bool   `yaml:"tls_skip_verify"`
 }
 
 // PatternsConfig holds pattern loading configuration
@@ -114,6 +156,7 @@ func Load(filename string) (*Config, error) {
 	}
 
 	applyBehaviorDefaults(&config.Proxy.Behavior)
+	applyProxyDefaults(&config.Proxy)
 	if err := validateBehaviorConfig(config.Proxy.Behavior); err != nil {
 		return nil, fmt.Errorf("invalid behavior config: %w", err)
 	}
@@ -154,9 +197,30 @@ func Default() *Config {
 				LogRequests:         true,
 				AddViolationHeaders: true,
 				SanitizationMode:    "redact",
+				TokenStoreBackend:   "memory",
 				TokenTTLms:          30000,
 				MaxVaults:           10000,
 				MaxTokensPerVault:   100000,
+			},
+			Redis: RedisConfig{
+				KeyPrefix:      "eko:",
+				MetaSuffix:     "vault_meta:",
+				PayloadSuffix:  "vault_payload:",
+				PoolSize:       10,
+				MinIdleConns:   2,
+				DialTimeoutMs:  100,
+				ReadTimeoutMs:  100,
+				WriteTimeoutMs: 100,
+				MaxRetries:     3,
+			},
+			Crypto: CryptoConfig{
+				Provider:    "local",
+				ActiveKeyID: "local-dev",
+				VaultTransit: VaultTransitConfig{
+					Mount:     "transit",
+					KeyName:   "eko-session",
+					TimeoutMs: 2000,
+				},
 			},
 		},
 		Patterns: PatternsConfig{
@@ -173,6 +237,9 @@ func applyBehaviorDefaults(cfg *BehaviorConfig) {
 	if cfg.TokenTTLms == 0 {
 		cfg.TokenTTLms = 30000
 	}
+	if cfg.TokenStoreBackend == "" {
+		cfg.TokenStoreBackend = "memory"
+	}
 	if cfg.MaxVaults == 0 {
 		cfg.MaxVaults = 10000
 	}
@@ -181,9 +248,39 @@ func applyBehaviorDefaults(cfg *BehaviorConfig) {
 	}
 }
 
+func applyProxyDefaults(cfg *ProxyConfig) {
+	if cfg.Redis.KeyPrefix == "" {
+		cfg.Redis.KeyPrefix = "eko:"
+	}
+	if cfg.Redis.MetaSuffix == "" {
+		cfg.Redis.MetaSuffix = "vault_meta:"
+	}
+	if cfg.Redis.PayloadSuffix == "" {
+		cfg.Redis.PayloadSuffix = "vault_payload:"
+	}
+	if cfg.Crypto.Provider == "" {
+		cfg.Crypto.Provider = "local"
+	}
+	if cfg.Crypto.ActiveKeyID == "" {
+		cfg.Crypto.ActiveKeyID = "local-dev"
+	}
+	if cfg.Crypto.VaultTransit.Mount == "" {
+		cfg.Crypto.VaultTransit.Mount = "transit"
+	}
+	if cfg.Crypto.VaultTransit.KeyName == "" {
+		cfg.Crypto.VaultTransit.KeyName = "eko-session"
+	}
+	if cfg.Crypto.VaultTransit.TimeoutMs == 0 {
+		cfg.Crypto.VaultTransit.TimeoutMs = 2000
+	}
+}
+
 func validateBehaviorConfig(cfg BehaviorConfig) error {
 	if cfg.SanitizationMode != "redact" && cfg.SanitizationMode != "tokenize" {
 		return fmt.Errorf("sanitization_mode must be \"redact\" or \"tokenize\"")
+	}
+	if cfg.TokenStoreBackend != "memory" && cfg.TokenStoreBackend != "redis" {
+		return fmt.Errorf("token_store_backend must be \"memory\" or \"redis\"")
 	}
 	if cfg.TokenTTLms <= 0 {
 		return fmt.Errorf("token_ttl_ms must be > 0")

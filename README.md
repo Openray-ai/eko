@@ -265,7 +265,37 @@ proxy:
     log_requests: true
     add_violation_headers: true
     sanitization_mode: "tokenize"  # Options: redact, tokenize
+    token_store_backend: "memory"  # Options: memory, redis
     token_ttl_ms: 30000            # Token vault TTL in ms (tokenize mode only)
+
+  redis:
+    addr: "127.0.0.1:6379"
+    username: ""
+    password: ""
+    db: 0
+    key_prefix: "eko:"
+    meta_suffix: "vault_meta:"
+    payload_suffix: "vault_payload:"
+    pool_size: 10
+    min_idle_conns: 2
+    dial_timeout_ms: 100
+    read_timeout_ms: 100
+    write_timeout_ms: 100
+    max_retries: 3
+
+  crypto:
+    provider: "local"  # Options: local, vault-transit
+    active_key_id: "local-dev"
+    local_master_key: "BASE64_32_BYTE_AES_KEY"
+    fallback_keys: []
+    vault_transit:
+      address: "https://vault.example.com"
+      token: "VAULT_TOKEN"
+      namespace: ""
+      mount: "transit"
+      key_name: "eko-session"
+      timeout_ms: 2000
+      tls_skip_verify: false
 
 # Pattern management
 patterns:

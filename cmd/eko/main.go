@@ -39,7 +39,12 @@ func main() {
 
 	// Initialize core components
 	det := detector.New()
-	san, resolver := buildSanitizer(cfg, det)
+	san, resolver, sessionStore := buildSanitizer(cfg, det)
+	defer func() {
+		if sessionStore != nil {
+			_ = sessionStore.Close()
+		}
+	}()
 
 	// Load default patterns
 	det.LoadDefaultPatterns()
@@ -48,7 +53,7 @@ func main() {
 	openaiProxy := buildOpenAIProxy(cfg, san, resolver)
 
 	// Initialize HTTP handlers
-	router := buildRouter(san, openaiProxy)
+	router := buildRouter(san, openaiProxy, sessionStore)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
@@ -72,20 +77,21 @@ func main() {
 	}
 }
 
-func buildSanitizer(cfg *config.Config, det *detector.Detector) (*sanitizer.Sanitizer, *tokenizer.Resolver) {
+func buildSanitizer(cfg *config.Config, det *detector.Detector) (*sanitizer.Sanitizer, *tokenizer.Resolver, tokenizer.SessionStore) {
 	mode := cfg.Proxy.Behavior.SanitizationMode
 	if mode == "tokenize" {
-		vaultManager := tokenizer.NewVaultManager(
-			time.Duration(cfg.Proxy.Behavior.TokenTTLms)*time.Millisecond,
-			tokenizer.WithMaxVaults(cfg.Proxy.Behavior.MaxVaults),
-			tokenizer.WithMaxTokensPerVault(cfg.Proxy.Behavior.MaxTokensPerVault),
-		)
+		store, err := buildSessionStore(cfg)
+		if err != nil {
+			logger.Fatal("Failed to initialize session store", logger.Fields{
+				"error": err.Error(),
+			})
+		}
 		tok := tokenizer.NewTokenizer()
-		resolver := tokenizer.NewResolver(vaultManager)
-		return sanitizer.NewWithTokenizer(det, tok, vaultManager, mode), resolver
+		resolver := tokenizer.NewResolver(store)
+		return sanitizer.NewWithTokenizer(det, tok, store, mode), resolver, store
 	}
 
-	return sanitizer.New(det), nil
+	return sanitizer.New(det), nil, nil
 }
 
 func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *tokenizer.Resolver) *openai.Proxy {
@@ -101,11 +107,74 @@ func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *to
 	return openaiProxy
 }
 
-func buildRouter(san *sanitizer.Sanitizer, openaiProxy *openai.Proxy) *gin.Engine {
+func buildRouter(san *sanitizer.Sanitizer, openaiProxy *openai.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
 	sanitizeHandler := handlers.NewSanitizeHandler(san)
-	healthHandler := handlers.NewHealthHandler()
+	var healthChecker tokenizer.HealthChecker
+	if checker, ok := sessionStore.(tokenizer.HealthChecker); ok {
+		healthChecker = checker
+	}
+	healthHandler := handlers.NewHealthHandler(healthChecker)
 
 	router := gin.New()
 	routes.SetupRoutes(router, sanitizeHandler, healthHandler, openaiProxy)
 	return router
+}
+
+func buildSessionStore(cfg *config.Config) (tokenizer.SessionStore, error) {
+	ttl := time.Duration(cfg.Proxy.Behavior.TokenTTLms) * time.Millisecond
+	if cfg.Proxy.Behavior.TokenStoreBackend == "redis" {
+		keyProvider, err := buildKeyProvider(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return tokenizer.NewRedisStore(tokenizer.RedisStoreConfig{
+			Addr:          cfg.Proxy.Redis.Addr,
+			Username:      cfg.Proxy.Redis.Username,
+			Password:      cfg.Proxy.Redis.Password,
+			DB:            cfg.Proxy.Redis.DB,
+			KeyPrefix:     cfg.Proxy.Redis.KeyPrefix,
+			MetaSuffix:    cfg.Proxy.Redis.MetaSuffix,
+			PayloadSuffix: cfg.Proxy.Redis.PayloadSuffix,
+			PoolSize:      cfg.Proxy.Redis.PoolSize,
+			MinIdleConns:  cfg.Proxy.Redis.MinIdleConns,
+			DialTimeout:   time.Duration(cfg.Proxy.Redis.DialTimeoutMs) * time.Millisecond,
+			ReadTimeout:   time.Duration(cfg.Proxy.Redis.ReadTimeoutMs) * time.Millisecond,
+			WriteTimeout:  time.Duration(cfg.Proxy.Redis.WriteTimeoutMs) * time.Millisecond,
+			MaxRetries:    cfg.Proxy.Redis.MaxRetries,
+			TTL:           ttl,
+			MaxTokens:     cfg.Proxy.Behavior.MaxTokensPerVault,
+			HealthTimeout: 2 * time.Second,
+			KeyProvider:   keyProvider,
+		})
+	}
+
+	return tokenizer.NewVaultManager(
+		ttl,
+		tokenizer.WithMaxVaults(cfg.Proxy.Behavior.MaxVaults),
+		tokenizer.WithMaxTokensPerVault(cfg.Proxy.Behavior.MaxTokensPerVault),
+	), nil
+}
+
+func buildKeyProvider(cfg *config.Config) (tokenizer.KeyProvider, error) {
+	switch cfg.Proxy.Crypto.Provider {
+	case "local":
+		fallback := make(map[string]string, len(cfg.Proxy.Crypto.FallbackKeys))
+		for _, key := range cfg.Proxy.Crypto.FallbackKeys {
+			fallback[key.KeyID] = key.MasterKey
+		}
+		return tokenizer.NewStaticKeyProviderWithFallbackBase64(cfg.Proxy.Crypto.ActiveKeyID, cfg.Proxy.Crypto.LocalMasterKey, fallback)
+	case "vault-transit":
+		return tokenizer.NewVaultTransitKeyProvider(tokenizer.VaultTransitKeyProviderConfig{
+			Address:       cfg.Proxy.Crypto.VaultTransit.Address,
+			Token:         cfg.Proxy.Crypto.VaultTransit.Token,
+			Namespace:     cfg.Proxy.Crypto.VaultTransit.Namespace,
+			Mount:         cfg.Proxy.Crypto.VaultTransit.Mount,
+			KeyName:       cfg.Proxy.Crypto.VaultTransit.KeyName,
+			ActiveKeyID:   cfg.Proxy.Crypto.ActiveKeyID,
+			Timeout:       time.Duration(cfg.Proxy.Crypto.VaultTransit.TimeoutMs) * time.Millisecond,
+			TLSSkipVerify: cfg.Proxy.Crypto.VaultTransit.TLSSkipVerify,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported crypto provider %q", cfg.Proxy.Crypto.Provider)
+	}
 }
