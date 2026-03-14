@@ -342,6 +342,8 @@ func (s *Sanitizer) getRedactionLabel(patternName, patternType string) string {
 		patterns.PatternSwiftCode:         "[REDACTED_SWIFT]",
 		patterns.PatternSSHPrivateKey:     "[REDACTED_PRIVATE_KEY]",
 		patterns.PatternPasswordVar:       "[REDACTED_PASSWORD]",
+		patterns.PatternDateOfBirth:       "[REDACTED_DOB]",
+		patterns.PatternPostalCode:        "[REDACTED_POSTAL_CODE]",
 	}
 
 	// Return specific label if available
