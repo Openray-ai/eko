@@ -286,6 +286,137 @@ func TestRedisStoreRoundTripWithVaultTransitProvider(t *testing.T) {
 	}
 }
 
+func TestRedisStoreRoundTripWithVaultTransitProviderAfterKeyChange(t *testing.T) {
+	mini := miniredis.RunT(t)
+
+	masterKey := make([]byte, aeadKeySize)
+	copy(masterKey, []byte("0123456789abcdef0123456789abcdef"))
+	vaultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/transit/encrypt/legacy-session":
+			var req vaultTransitEncryptRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode encrypt request: %v", err)
+			}
+			plaintext, err := base64.StdEncoding.DecodeString(req.Plaintext)
+			if err != nil {
+				t.Fatalf("decode plaintext: %v", err)
+			}
+			ciphertext, nonce, err := encryptWithKey(masterKey, plaintext)
+			if err != nil {
+				t.Fatalf("encrypt data key: %v", err)
+			}
+			resp := vaultTransitEncryptResponse{}
+			resp.Data.Ciphertext = "vault:v1:" + base64.StdEncoding.EncodeToString(nonce) + ":" + base64.StdEncoding.EncodeToString(ciphertext)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/v1/transit/decrypt/legacy-session":
+			var req vaultTransitDecryptRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode decrypt request: %v", err)
+			}
+			parts := strings.Split(req.Ciphertext, ":")
+			if len(parts) != 4 {
+				t.Fatalf("unexpected ciphertext format %q", req.Ciphertext)
+			}
+			nonce, err := base64.StdEncoding.DecodeString(parts[2])
+			if err != nil {
+				t.Fatalf("decode nonce: %v", err)
+			}
+			ciphertext, err := base64.StdEncoding.DecodeString(parts[3])
+			if err != nil {
+				t.Fatalf("decode ciphertext: %v", err)
+			}
+			plaintext, err := decryptWithKey(masterKey, ciphertext, nonce)
+			if err != nil {
+				t.Fatalf("decrypt wrapped key: %v", err)
+			}
+			resp := vaultTransitDecryptResponse{}
+			resp.Data.Plaintext = base64.StdEncoding.EncodeToString(plaintext)
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/v1/transit/decrypt/new-session":
+			t.Fatalf("historical payload should be decrypted with stored key id, got %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected vault transit path %s", r.URL.Path)
+		}
+	}))
+	defer vaultServer.Close()
+
+	writerProvider, err := NewVaultTransitKeyProvider(VaultTransitKeyProviderConfig{
+		Address: vaultServer.URL,
+		Token:   "token",
+		Mount:   "transit",
+		KeyName: "legacy-session",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new writer provider: %v", err)
+	}
+
+	store, err := NewRedisStore(RedisStoreConfig{
+		Addr:          mini.Addr(),
+		KeyPrefix:     "test:",
+		MetaSuffix:    "meta:",
+		PayloadSuffix: "payload:",
+		TTL:           time.Minute,
+		MaxTokens:     10,
+		HealthTimeout: time.Second,
+		KeyProvider:   writerProvider,
+	})
+	if err != nil {
+		t.Fatalf("new redis store: %v", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	handle, err := store.BeginSession(context.Background(), resolverSessionID)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := handle.Vault().Store("john@acme.com", "masked@example.com"); err != nil {
+		t.Fatalf("store token: %v", err)
+	}
+	if err := handle.Save(context.Background()); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	readerProvider, err := NewVaultTransitKeyProvider(VaultTransitKeyProviderConfig{
+		Address: vaultServer.URL,
+		Token:   "token",
+		Mount:   "transit",
+		KeyName: "new-session",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new reader provider: %v", err)
+	}
+
+	rotatedStore, err := NewRedisStore(RedisStoreConfig{
+		Addr:          mini.Addr(),
+		KeyPrefix:     "test:",
+		MetaSuffix:    "meta:",
+		PayloadSuffix: "payload:",
+		TTL:           time.Minute,
+		MaxTokens:     10,
+		HealthTimeout: time.Second,
+		KeyProvider:   readerProvider,
+	})
+	if err != nil {
+		t.Fatalf("new rotated redis store: %v", err)
+	}
+	defer func() {
+		_ = rotatedStore.Close()
+	}()
+
+	loaded, err := rotatedStore.GetSession(context.Background(), resolverSessionID)
+	if err != nil {
+		t.Fatalf("get after key change: %v", err)
+	}
+	if got, ok := loaded.GetOriginal("masked@example.com"); !ok || got != "john@acme.com" {
+		t.Fatalf("reverse lookup = %q, %v", got, ok)
+	}
+}
+
 func TestStaticKeyProviderFallbackDecryptsRotatedKey(t *testing.T) {
 	oldKey := make([]byte, aeadKeySize)
 	newKey := make([]byte, aeadKeySize)

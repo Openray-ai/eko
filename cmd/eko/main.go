@@ -58,9 +58,10 @@ func main() {
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
 	logFields := logger.Fields{
-		"address":           addr,
-		"health_endpoint":   "http://localhost:8080/health",
-		"sanitize_endpoint": "POST http://localhost:8080/v1/sanitize",
+		"address":            addr,
+		"health_endpoint":    "http://localhost:8080/health",
+		"readiness_endpoint": "http://localhost:8080/ready",
+		"sanitize_endpoint":  "POST http://localhost:8080/v1/sanitize",
 	}
 
 	if cfg.Proxy.OpenAI.Enabled {

@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultVaultTransitMount = "transit"
-	defaultVaultTransitPath  = "keys/eko-session"
+	defaultVaultTransitPath  = "eko-session"
 )
 
 type VaultTransitKeyProviderConfig struct {
@@ -120,11 +120,15 @@ func (p *VaultTransitKeyProvider) UnwrapDataKey(ctx context.Context, keyID strin
 	if keyID == "" {
 		return nil, fmt.Errorf("%w: missing vault transit key id", ErrSessionStoreCorrupted)
 	}
+	mount, keyName, err := parseVaultTransitKeyID(keyID)
+	if err != nil {
+		return nil, err
+	}
 	reqBody := vaultTransitDecryptRequest{
 		Ciphertext: string(wrappedKey),
 	}
 	var resp vaultTransitDecryptResponse
-	if err := p.doTransitRequest(ctx, http.MethodPost, p.decryptPath(), reqBody, &resp); err != nil {
+	if err := p.doTransitRequest(ctx, http.MethodPost, vaultTransitDecryptPath(mount, keyName), reqBody, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Data.Plaintext == "" {
@@ -138,11 +142,11 @@ func (p *VaultTransitKeyProvider) UnwrapDataKey(ctx context.Context, keyID strin
 }
 
 func (p *VaultTransitKeyProvider) encryptPath() string {
-	return fmt.Sprintf("/v1/%s/encrypt/%s", p.mount, p.keyName)
+	return vaultTransitEncryptPath(p.mount, p.keyName)
 }
 
 func (p *VaultTransitKeyProvider) decryptPath() string {
-	return fmt.Sprintf("/v1/%s/decrypt/%s", p.mount, p.keyName)
+	return vaultTransitDecryptPath(p.mount, p.keyName)
 }
 
 func (p *VaultTransitKeyProvider) doTransitRequest(ctx context.Context, method, path string, payload any, target any) error {
@@ -188,4 +192,29 @@ func (p *VaultTransitKeyProvider) doTransitRequest(ctx context.Context, method, 
 
 func vaultTransitStableKeyID(mount, keyName string) string {
 	return fmt.Sprintf("vault-transit:%s/%s", mount, keyName)
+}
+
+func parseVaultTransitKeyID(keyID string) (string, string, error) {
+	const prefix = "vault-transit:"
+	if !strings.HasPrefix(keyID, prefix) {
+		return "", "", fmt.Errorf("%w: invalid vault transit key id %q", ErrSessionStoreCorrupted, keyID)
+	}
+
+	path := strings.TrimPrefix(keyID, prefix)
+	slash := strings.LastIndex(path, "/")
+	if slash <= 0 || slash == len(path)-1 {
+		return "", "", fmt.Errorf("%w: invalid vault transit key id %q", ErrSessionStoreCorrupted, keyID)
+	}
+
+	mount := path[:slash]
+	keyName := path[slash+1:]
+	return mount, keyName, nil
+}
+
+func vaultTransitEncryptPath(mount, keyName string) string {
+	return fmt.Sprintf("/v1/%s/encrypt/%s", mount, keyName)
+}
+
+func vaultTransitDecryptPath(mount, keyName string) string {
+	return fmt.Sprintf("/v1/%s/decrypt/%s", mount, keyName)
 }

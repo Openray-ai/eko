@@ -431,6 +431,7 @@ curl http://localhost:8080/metrics
 
 # Health check
 curl http://localhost:8080/health
+curl http://localhost:8080/ready
 ```
 
 ### Violation Logging

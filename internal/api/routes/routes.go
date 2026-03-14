@@ -19,8 +19,9 @@ func SetupRoutes(
 	router.Use(middleware.Recovery())
 	router.Use(middleware.CORS())
 
-	// Health check endpoint
-	router.GET("/health", healthHandler.Handle)
+	// Health and readiness endpoints
+	router.GET("/health", healthHandler.HandleLiveness)
+	router.GET("/ready", healthHandler.HandleReadiness)
 
 	// Core API v1
 	v1 := router.Group("/v1")
