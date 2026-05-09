@@ -379,8 +379,8 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionExpiredVault(t *testing.T)
 		"Content-Type": "application/json",
 	})
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected status 503, got %d", rec.Code)
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected status 410, got %d", rec.Code)
 	}
 
 	if got := rec.Header().Get("X-Eko-Resolve-Status"); got != "vault_expired" && got != "no_vault" {

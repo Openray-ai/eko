@@ -17,25 +17,14 @@ func NewHealthHandler(checker tokenizer.HealthChecker) *HealthHandler {
 	return &HealthHandler{checker: checker}
 }
 
+// HandleLiveness reports whether the process itself is alive. It deliberately
+// does not probe external dependencies — that belongs to /ready — so a flaky
+// backing service cannot trigger pod restarts under K8s liveness probes.
 func (h *HealthHandler) HandleLiveness(c *gin.Context) {
-	response := gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"status":  "healthy",
 		"service": "eko",
-	}
-
-	if h.checker != nil {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
-		defer cancel()
-		if err := h.checker.HealthCheck(ctx); err != nil {
-			response["dependency_status"] = "degraded"
-			response["dependency_error"] = err.Error()
-			c.JSON(http.StatusOK, response)
-			return
-		}
-		response["dependency_status"] = "healthy"
-	}
-
-	c.JSON(http.StatusOK, response)
+	})
 }
 
 func (h *HealthHandler) HandleReadiness(c *gin.Context) {

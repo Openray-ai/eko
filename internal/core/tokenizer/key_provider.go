@@ -100,7 +100,9 @@ func (p *StaticKeyProvider) WrapDataKey(_ context.Context, plaintextKey []byte) 
 func (p *StaticKeyProvider) UnwrapDataKey(_ context.Context, keyID string, wrappedKey, nonce []byte) ([]byte, error) {
 	masterKey, ok := p.keys[keyID]
 	if !ok {
-		return nil, fmt.Errorf("%w: unknown key id %q", ErrSessionStoreCorrupted, keyID)
+		// Treated as a recoverable crypto failure (likely missing fallback during rotation)
+		// rather than corruption, so the caller does not delete the underlying data.
+		return nil, fmt.Errorf("%w: unknown key id %q", ErrSessionStoreCryptoFailure, keyID)
 	}
 	return decryptWithKey(masterKey, wrappedKey, nonce)
 }
@@ -135,15 +137,18 @@ func encryptWithKey(key, plaintext []byte) ([]byte, []byte, error) {
 func decryptWithKey(key, ciphertext, nonce []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to initialize cipher: %v", ErrSessionStoreCorrupted, err)
+		return nil, fmt.Errorf("%w: failed to initialize cipher: %v", ErrSessionStoreCryptoFailure, err)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to initialize AEAD: %v", ErrSessionStoreCorrupted, err)
+		return nil, fmt.Errorf("%w: failed to initialize AEAD: %v", ErrSessionStoreCryptoFailure, err)
 	}
+	// AEAD verification failure may indicate tampering OR a key misconfiguration
+	// (wrong active key, missing rotation fallback). Surface as crypto failure so
+	// the caller leaves the ciphertext intact for operator inspection / recovery.
 	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to decrypt payload: %v", ErrSessionStoreCorrupted, err)
+		return nil, fmt.Errorf("%w: failed to decrypt payload: %v", ErrSessionStoreCryptoFailure, err)
 	}
 	return plaintext, nil
 }

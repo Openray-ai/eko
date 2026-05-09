@@ -18,7 +18,7 @@ func (f fakeHealthChecker) HealthCheck(context.Context) error {
 	return f.err
 }
 
-func TestHealthHandlerLivenessDegradesButStays200(t *testing.T) {
+func TestHealthHandlerLivenessIgnoresDependencyState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	handler := NewHealthHandler(fakeHealthChecker{err: errors.New("redis down")})

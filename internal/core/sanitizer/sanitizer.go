@@ -13,13 +13,14 @@ import (
 	"time"
 )
 
-const retryTokenizationAttempts = 3
-
+// Stores that don't implement ConflictRetrier (e.g. the in-memory vault
+// manager) cannot produce ErrSessionStoreConflict, so a single attempt is
+// sufficient. Redis opts in via ConflictRetries.
 func (s *Sanitizer) tokenizationAttempts() int {
 	if retrier, ok := s.sessionStore.(tokenizer.ConflictRetrier); ok && retrier.ConflictRetries() > 0 {
 		return retrier.ConflictRetries()
 	}
-	return retryTokenizationAttempts
+	return 1
 }
 
 // Sanitizer handles redaction and replacement of sensitive data
@@ -119,9 +120,12 @@ func (s *Sanitizer) Sanitize(input string) (*Result, error) {
 	}, nil
 }
 
-// SanitizeWithSession detects and sanitizes sensitive data from input with session awareness
+// SanitizeWithSession detects and sanitizes sensitive data from input with session awareness.
+//
+// Deprecated: prefer SanitizeWithContext so cancellation propagates into the
+// session store (Redis dial/read timeouts, Vault Transit calls).
 func (s *Sanitizer) SanitizeWithSession(input, sessionID string) (*Result, error) {
-	return s.SanitizeWithContext(nil, input, sessionID)
+	return s.SanitizeWithContext(context.TODO(), input, sessionID)
 }
 
 func (s *Sanitizer) SanitizeWithContext(ctx context.Context, input, sessionID string) (*Result, error) {
