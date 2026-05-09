@@ -87,6 +87,24 @@ func TestClient_PredictBatch(t *testing.T) {
 	}
 }
 
+func TestClient_PredictBatch_RejectsCardinalityMismatch(t *testing.T) {
+	// Sidecar returns one result for two inputs — caller would silently
+	// receive a misaligned slice if we didn't enforce positional contract.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, `{"results":[{"spans":[]}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Endpoint: server.URL, Timeout: time.Second})
+	_, err := client.PredictBatch(context.Background(), []string{"one", "two"})
+	if err == nil {
+		t.Fatalf("expected cardinality error")
+	}
+	if !strings.Contains(err.Error(), "predict_batch returned") {
+		t.Fatalf("error should mention cardinality, got: %v", err)
+	}
+}
+
 type countingMetrics struct {
 	requests, failures, breakerSkips atomic.Int64
 	breakerOpen                      atomic.Bool

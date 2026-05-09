@@ -112,6 +112,16 @@ func (c *Client) PredictBatch(ctx context.Context, texts []string) ([][]Span, er
 	if err := c.do(ctx, "/predict_batch", map[string]any{"texts": texts}, &resp); err != nil {
 		return nil, err
 	}
+	// Enforce the positional contract: a sidecar that returns a different
+	// number of results than texts breaks any caller indexing into the
+	// output. Better to surface this as an error than to silently return
+	// a misaligned slice.
+	if len(resp.Results) != len(texts) {
+		return nil, fmt.Errorf(
+			"slm: predict_batch returned %d results for %d inputs",
+			len(resp.Results), len(texts),
+		)
+	}
 	out := make([][]Span, len(resp.Results))
 	for i, r := range resp.Results {
 		out[i] = r.Spans

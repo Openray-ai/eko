@@ -333,8 +333,8 @@ func validateSLMConfig(cfg SLMConfig) error {
 	if cfg.TimeoutMs <= 0 {
 		return fmt.Errorf("timeout_ms must be > 0")
 	}
-	if cfg.MaxInputBytes < 0 {
-		return fmt.Errorf("max_input_bytes must be >= 0")
+	if cfg.MaxInputBytes <= 0 {
+		return fmt.Errorf("max_input_bytes must be > 0")
 	}
 	if cfg.Breaker.FailureThreshold <= 0 {
 		return fmt.Errorf("breaker.failure_threshold must be > 0")

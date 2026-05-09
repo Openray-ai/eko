@@ -500,7 +500,14 @@ def _resize_token_classifier_head(model, token_label_names: list[str]) -> None:
 
 def build_engine_from_env() -> InferenceEngine:
     model_name = os.environ.get("PRIVACY_FILTER_MODEL_NAME", "openai/privacy-filter")
-    adapter_name = os.environ.get("PRIVACY_FILTER_ADAPTER_NAME") or None
+    # Default to the published Naija LoRA adapter so a bare `docker compose up`
+    # matches the documented behavior. Operators can opt out by setting
+    # PRIVACY_FILTER_ADAPTER_NAME="" (empty string) to run the base model alone.
+    adapter_name = os.environ.get(
+        "PRIVACY_FILTER_ADAPTER_NAME", "iamSamurai/privacy-filter-nigeria"
+    )
+    if adapter_name == "":
+        adapter_name = None
     device = os.environ.get("PRIVACY_FILTER_DEVICE", "cpu")
     if device == "cuda":
         import torch

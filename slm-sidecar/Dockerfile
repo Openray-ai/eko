@@ -26,4 +26,6 @@ RUN pip install --upgrade pip \
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Honor PRIVACY_FILTER_PORT env var (documented in slm-sidecar/README.md);
+# fall back to 8000 if unset. Shell form is required for env-var expansion.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PRIVACY_FILTER_PORT:-8000}"]

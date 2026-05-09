@@ -39,7 +39,7 @@ func (h *SanitizeHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	result, err := h.sanitizer.SanitizeWithSession(req.Prompt, sessionID)
+	result, err := h.sanitizer.SanitizeWithContext(c.Request.Context(), req.Prompt, sessionID)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, tokenizer.ErrSessionStoreUnavailable) || errors.Is(err, tokenizer.ErrSessionStoreConflict) {
