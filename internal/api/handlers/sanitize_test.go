@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"eko/internal/core/detector"
 	"eko/internal/core/patterns"
 	"eko/internal/core/sanitizer"
+	"eko/internal/core/slm"
 	"eko/internal/core/tokenizer"
 
 	"github.com/gin-gonic/gin"
@@ -112,6 +114,59 @@ func TestSanitizeHandler_UsesProvidedSessionID(t *testing.T) {
 
 	if resp.SessionID != sessionID {
 		t.Fatalf("expected session_id %q, got %q", sessionID, resp.SessionID)
+	}
+}
+
+// stubSLM implements detector.SLMRunner for handler tests.
+type stubSLM struct {
+	called bool
+}
+
+func (s *stubSLM) Detect(_ context.Context, _ string) ([]slm.Violation, error) {
+	s.called = true
+	return nil, nil
+}
+
+func TestSanitizeHandler_SLMOptIn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name        string
+		body        string
+		expectCalls bool
+	}{
+		{"omitted defaults to off", `{"prompt":"hi"}`, false},
+		{"explicit false", `{"prompt":"hi","slm":false}`, false},
+		{"explicit true", `{"prompt":"hi","slm":true}`, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			det := detector.New()
+			loadTestPatterns(t, det)
+			stub := &stubSLM{}
+			det.SetSLM(stub)
+
+			tok := tokenizer.NewTokenizer()
+			vm := tokenizer.NewVaultManager(1 * time.Minute)
+			san := sanitizer.NewWithTokenizer(det, tok, vm, "tokenize")
+
+			handler := NewSanitizeHandler(san)
+			router := gin.New()
+			router.POST("/v1/sanitize", handler.Handle)
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/sanitize", bytes.NewReader([]byte(tc.body)))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if stub.called != tc.expectCalls {
+				t.Fatalf("SLM called=%v, want %v", stub.called, tc.expectCalls)
+			}
+		})
 	}
 }
 

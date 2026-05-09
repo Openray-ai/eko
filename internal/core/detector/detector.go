@@ -72,6 +72,15 @@ func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Viola
 	slmRunner := d.slm
 	d.mu.RUnlock()
 
+	// Honor an explicit per-request opt-in/opt-out (POST /v1/sanitize sets
+	// this from the body's `slm` field). When the caller hasn't expressed a
+	// preference, the configured runner is used as-is.
+	if slmRunner != nil {
+		if enabled, set := slm.RequestDecision(ctx); set && !enabled {
+			slmRunner = nil
+		}
+	}
+
 	if len(patternList) == 0 {
 		logger.Warn("No patterns loaded for detection", logger.Fields{})
 		return []Violation{}, nil

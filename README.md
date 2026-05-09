@@ -400,6 +400,27 @@ unreachable, or returns errors, Ekō logs a warning, increments
 never fail because SLM is down. After `failure_threshold` consecutive failures
 the breaker trips and SLM is skipped entirely until `cooldown_ms` has elapsed.
 
+**Per-request opt-in for `POST /v1/sanitize`:** the config flag controls
+whether the SLM client is wired up at startup. Independently, the sanitize
+endpoint accepts an `slm` boolean in the request body that toggles SLM use
+*for that single request*. Defaults to `false` when omitted — callers must
+opt in explicitly:
+
+```bash
+# Regex-only (default behaviour)
+curl -X POST localhost:8080/v1/sanitize \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Amina Yusuf called from +234 802 111 3344"}'
+
+# Opt this request in to SLM
+curl -X POST localhost:8080/v1/sanitize \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Amina Yusuf called from +234 802 111 3344","slm":true}'
+```
+
+Other endpoints (the OpenAI proxy paths) are unaffected — they always use SLM
+when the config flag enables it.
+
 See `slm-sidecar/README.md` for sidecar details.
 
 ---

@@ -114,6 +114,50 @@ func TestDetectWithContext_NoSLMConfigured(t *testing.T) {
 	}
 }
 
+func TestDetectWithContext_RequestOptOutSkipsSLM(t *testing.T) {
+	d := newTestDetectorWithEmail(t)
+	stub := &stubSLM{
+		violations: []slm.Violation{
+			{Type: patterns.TypePII, Severity: patterns.SeverityWarn, Pattern: "slm_person", Matched: "X", Position: 0, End: 1},
+		},
+	}
+	d.SetSLM(stub)
+
+	ctx := slm.WithRequestEnabled(context.Background(), false)
+	out, err := d.DetectWithContext(ctx, "X amina@example.com")
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if stub.called {
+		t.Fatalf("expected SLM stub NOT to be invoked when caller opted out")
+	}
+	if len(out) != 1 || out[0].Pattern != "email" {
+		t.Fatalf("expected only regex email violation, got %+v", out)
+	}
+}
+
+func TestDetectWithContext_RequestOptInRunsSLM(t *testing.T) {
+	d := newTestDetectorWithEmail(t)
+	stub := &stubSLM{
+		violations: []slm.Violation{
+			{Type: patterns.TypePII, Severity: patterns.SeverityWarn, Pattern: "slm_person", Matched: "X", Position: 0, End: 1},
+		},
+	}
+	d.SetSLM(stub)
+
+	ctx := slm.WithRequestEnabled(context.Background(), true)
+	out, err := d.DetectWithContext(ctx, "X amina@example.com")
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if !stub.called {
+		t.Fatalf("expected SLM stub to be invoked when caller opted in")
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected regex + SLM violations, got %+v", out)
+	}
+}
+
 func TestDetect_DelegatesToContext(t *testing.T) {
 	d := newTestDetectorWithEmail(t)
 	stub := &stubSLM{
