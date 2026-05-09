@@ -52,16 +52,24 @@ proxy:
   crypto:
     provider: "local"            # Options: local, vault-transit
     active_key_id: "local-dev"
-    local_master_key: ""         # Base64-encoded 32-byte AES key; required for Redis backend
-    fallback_keys: []            # Optional local fallback keys for rotation
+    # Base64-encoded 32-byte AES key; required for the Redis backend.
+    # SECURITY: do not commit a real key here. Inject via secrets manager
+    # (e.g. Kubernetes Secret, AWS Secrets Manager) at deploy time.
+    local_master_key: ""
+    # Optional fallback keys to allow decrypting payloads sealed with a prior
+    # active_key_id. To rotate: add the current key here, then change
+    # active_key_id + local_master_key to the new pair. Remove the fallback
+    # entry once the session TTL has elapsed for all live sessions.
+    # Example: [{key_id: "local-dev", master_key: "BASE64_PREVIOUS_KEY"}]
+    fallback_keys: []
     vault_transit:
       address: "https://vault.example.com"
-      token: ""
+      token: ""                  # SECURITY: inject at deploy time, do not commit
       namespace: ""
       mount: "transit"
       key_name: "eko-session"
       timeout_ms: 2000
-      tls_skip_verify: false
+      tls_skip_verify: false     # Leave false in production
 
 # Pattern management
 patterns:

@@ -417,6 +417,80 @@ func TestRedisStoreRoundTripWithVaultTransitProviderAfterKeyChange(t *testing.T)
 	}
 }
 
+func TestRedisStoreCryptoFailurePreservesCiphertext(t *testing.T) {
+	mini := miniredis.RunT(t)
+
+	writerKey := make([]byte, aeadKeySize)
+	if _, err := rand.Read(writerKey); err != nil {
+		t.Fatalf("generate writer key: %v", err)
+	}
+	writerProvider, err := NewStaticKeyProvider("writer-key", writerKey)
+	if err != nil {
+		t.Fatalf("writer provider: %v", err)
+	}
+
+	writerStore, err := NewRedisStore(RedisStoreConfig{
+		Addr:          mini.Addr(),
+		KeyPrefix:     "test:",
+		MetaSuffix:    "meta:",
+		PayloadSuffix: "payload:",
+		TTL:           time.Minute,
+		MaxTokens:     10,
+		HealthTimeout: time.Second,
+		KeyProvider:   writerProvider,
+	})
+	if err != nil {
+		t.Fatalf("writer store: %v", err)
+	}
+	defer func() { _ = writerStore.Close() }()
+
+	handle, err := writerStore.BeginSession(context.Background(), resolverSessionID)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := handle.Vault().Store("john@acme.com", "masked@example.com"); err != nil {
+		t.Fatalf("store token: %v", err)
+	}
+	if err := handle.Save(context.Background()); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Reader has no fallback for "writer-key" — simulates a misconfigured rotation.
+	otherKey := make([]byte, aeadKeySize)
+	if _, err := rand.Read(otherKey); err != nil {
+		t.Fatalf("generate reader key: %v", err)
+	}
+	readerProvider, err := NewStaticKeyProvider("reader-key", otherKey)
+	if err != nil {
+		t.Fatalf("reader provider: %v", err)
+	}
+	readerStore, err := NewRedisStore(RedisStoreConfig{
+		Addr:          mini.Addr(),
+		KeyPrefix:     "test:",
+		MetaSuffix:    "meta:",
+		PayloadSuffix: "payload:",
+		TTL:           time.Minute,
+		MaxTokens:     10,
+		HealthTimeout: time.Second,
+		KeyProvider:   readerProvider,
+	})
+	if err != nil {
+		t.Fatalf("reader store: %v", err)
+	}
+	defer func() { _ = readerStore.Close() }()
+
+	_, err = readerStore.GetSession(context.Background(), resolverSessionID)
+	if !errors.Is(err, ErrSessionStoreCryptoFailure) {
+		t.Fatalf("expected crypto failure, got %v", err)
+	}
+
+	metaKey := "test:meta:" + resolverSessionID
+	payloadKey := "test:payload:" + resolverSessionID
+	if !mini.Exists(metaKey) || !mini.Exists(payloadKey) {
+		t.Fatal("expected ciphertext to be preserved after AEAD/key-id failure so a rotation fix can recover it")
+	}
+}
+
 func TestStaticKeyProviderFallbackDecryptsRotatedKey(t *testing.T) {
 	oldKey := make([]byte, aeadKeySize)
 	newKey := make([]byte, aeadKeySize)

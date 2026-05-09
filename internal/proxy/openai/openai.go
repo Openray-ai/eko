@@ -630,7 +630,9 @@ func statusCodeForResolutionError(err error) int {
 	case errors.Is(err, tokenizer.ErrSessionStoreUnavailable), errors.Is(err, tokenizer.ErrSessionStoreConflict):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, tokenizer.ErrVaultNotFound), errors.Is(err, tokenizer.ErrSessionExpired):
-		return http.StatusServiceUnavailable
+		// Permanent for this session — 410 signals "do not retry with this id"
+		// rather than 503 which encourages client retry loops.
+		return http.StatusGone
 	default:
 		return http.StatusInternalServerError
 	}

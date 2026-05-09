@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"eko/internal/helpers/logger"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -155,7 +156,7 @@ func (s *RedisStore) BeginSession(ctx context.Context, sessionID string) (Sessio
 
 	vaultState, err := s.decryptPayload(ctx, meta, payload)
 	if err != nil {
-		_ = s.deleteKeys(ctx, sessionID)
+		s.handleDecryptFailure(ctx, sessionID, err)
 		return nil, err
 	}
 
@@ -180,10 +181,28 @@ func (s *RedisStore) GetSession(ctx context.Context, sessionID string) (*Vault, 
 
 	state, err := s.decryptPayload(ctx, meta, payload)
 	if err != nil {
-		_ = s.deleteKeys(ctx, sessionID)
+		s.handleDecryptFailure(ctx, sessionID, err)
 		return nil, err
 	}
 	return state.toVault(sessionID, s.ttl, s.maxTokens), nil
+}
+
+// handleDecryptFailure decides whether to destroy the underlying Redis keys
+// after a payload decode/decrypt failure. Schema/encoding corruption is
+// unrecoverable and gets cleaned up; AEAD or unknown-key-id failures may
+// indicate a key misconfiguration during rotation, so the ciphertext is
+// preserved and the failure is logged at ERROR level for operator action.
+func (s *RedisStore) handleDecryptFailure(ctx context.Context, sessionID string, err error) {
+	if errors.Is(err, ErrSessionStoreCryptoFailure) {
+		logger.Error("Session payload failed AEAD verification; preserving ciphertext", logger.Fields{
+			"error":      err.Error(),
+			"session_id": sessionID,
+		})
+		return
+	}
+	if errors.Is(err, ErrSessionStoreCorrupted) {
+		_ = s.deleteKeys(ctx, sessionID)
+	}
 }
 
 func (s *RedisStore) HasSession(ctx context.Context, sessionID string) (bool, error) {
@@ -392,7 +411,7 @@ func (s *RedisStore) decryptPayload(ctx context.Context, meta *redisVaultMeta, p
 
 	dataKey, err := s.keyProvider.UnwrapDataKey(ctx, payload.KeyID, payload.WrappedDataKey, payload.WrappedKeyNonce)
 	if err != nil {
-		if errors.Is(err, ErrSessionStoreCorrupted) {
+		if errors.Is(err, ErrSessionStoreCorrupted) || errors.Is(err, ErrSessionStoreCryptoFailure) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: failed to unwrap data key: %v", ErrSessionStoreUnavailable, err)
@@ -516,6 +535,7 @@ func wrapStoreError(err error) error {
 		return nil
 	case errors.Is(err, ErrSessionStoreConflict),
 		errors.Is(err, ErrSessionStoreCorrupted),
+		errors.Is(err, ErrSessionStoreCryptoFailure),
 		errors.Is(err, ErrVaultNotFound),
 		errors.Is(err, ErrInvalidSessionID):
 		return err

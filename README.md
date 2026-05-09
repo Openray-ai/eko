@@ -296,7 +296,28 @@ proxy:
       key_name: "eko-session"
       timeout_ms: 2000
       tls_skip_verify: false
+```
 
+> **Secrets**: do not commit `local_master_key` or the Vault `token` to source
+> control. Inject them through your secrets manager at deploy time.
+
+#### Rotating the local master key
+
+The Redis-backed store seals each session with a random data key wrapped by
+the active master key. To rotate without invalidating live sessions:
+
+1. Add the *current* key to `crypto.fallback_keys` keyed by its `active_key_id`.
+2. Set `crypto.active_key_id` and `crypto.local_master_key` to the new pair.
+3. New writes use the new key; existing sessions continue to decrypt via the
+   fallback entry.
+4. Once `proxy.behavior.token_ttl_ms` has elapsed for all live sessions, the
+   fallback entry can be removed.
+
+For Vault Transit, key rotation is performed inside Vault and is transparent
+to Eko — the stored key id is `vault-transit:{mount}/{key_name}` and Vault
+selects the appropriate key version on decrypt.
+
+```yaml
 # Pattern management
 patterns:
   config_file: "./patterns/default.yaml"
