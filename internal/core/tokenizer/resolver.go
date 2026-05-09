@@ -1,17 +1,24 @@
 package tokenizer
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 type Resolver struct {
-	vaultManager *VaultManager
+	store SessionStore
 }
 
-func NewResolver(vm *VaultManager) *Resolver {
-	return &Resolver{vaultManager: vm}
+func NewResolver(store SessionStore) *Resolver {
+	return &Resolver{store: store}
 }
 
 func (r *Resolver) ResolveResponse(body []byte, sessionID string) ([]byte, error) {
-	vault, err := r.vaultManager.Get(sessionID)
+	return r.ResolveResponseWithContext(context.Background(), body, sessionID)
+}
+
+func (r *Resolver) ResolveResponseWithContext(ctx context.Context, body []byte, sessionID string) ([]byte, error) {
+	vault, err := r.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return body, err
 	}

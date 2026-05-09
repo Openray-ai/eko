@@ -252,8 +252,68 @@ proxy:
     log_requests: true
     add_violation_headers: true
     sanitization_mode: "tokenize"  # Options: redact, tokenize
+    token_store_backend: "memory"  # Options: memory, redis
     token_ttl_ms: 30000            # Token vault TTL in ms (tokenize mode only)
 
+  redis:
+    addr: "127.0.0.1:6379"
+    username: ""
+    password: ""
+    db: 0
+    key_prefix: "eko:"
+    meta_suffix: "vault_meta:"
+    payload_suffix: "vault_payload:"
+    pool_size: 10
+    min_idle_conns: 2
+    dial_timeout_ms: 100
+    read_timeout_ms: 100
+    write_timeout_ms: 100
+    max_retries: 3
+
+  crypto:
+    provider: "local"  # Options: local, vault-transit
+    active_key_id: "local-dev"
+    local_master_key: "BASE64_32_BYTE_AES_KEY"
+    fallback_keys: []
+    vault_transit:
+      address: "https://vault.example.com"
+      token: "VAULT_TOKEN"
+      namespace: ""
+      mount: "transit"
+      key_name: "eko-session"
+      timeout_ms: 2000
+      tls_skip_verify: false
+```
+
+> **Secrets**: do not commit `local_master_key` or the Vault `token` to source
+> control. Inject them through your secrets manager at deploy time.
+
+#### Rotating the local master key
+
+The Redis-backed store seals each session with a random data key wrapped by
+the active master key. To rotate without invalidating live sessions:
+
+1. Add an entry to `crypto.fallback_keys` whose `key_id` equals the current
+   `crypto.active_key_id` and whose `master_key` is the current
+   `crypto.local_master_key`. Roll this config to **all** replicas first.
+2. Set `crypto.active_key_id` and `crypto.local_master_key` to the new pair
+   and roll out.
+3. New writes use the new key; existing sessions continue to decrypt via the
+   fallback entry.
+4. Once `proxy.behavior.token_ttl_ms` has elapsed for all live sessions, the
+   fallback entry can be removed in a third rollout.
+
+> **Multi-replica caveat**: rolling out steps 1 and 2 in the wrong order — or
+> rolling step 2 to some replicas before step 1 reaches all of them — will
+> cause replicas on the old config to fail decrypting payloads written by the
+> new active key. Failures are non-destructive (ciphertext is preserved) but
+> requests will return 503 until config converges.
+
+For Vault Transit, key rotation is performed inside Vault and is transparent
+to Eko — the stored key id is `vault-transit:{mount}/{key_name}` and Vault
+selects the appropriate key version on decrypt.
+
+```yaml
 # Pattern management
 patterns:
   config_file: "./patterns/default.yaml"
@@ -436,6 +496,7 @@ scrape_configs:
 ```bash
 # Health check
 curl http://localhost:8080/health
+curl http://localhost:8080/ready
 ```
 
 ### Violation Logging

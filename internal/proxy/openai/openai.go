@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"context"
 	"eko/internal/core/detector"
 	"eko/internal/core/sanitizer"
 	"eko/internal/core/tokenizer"
@@ -155,13 +156,13 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 	if req.Stream {
 		sanitizationResult, err = p.sanitizeMessagesRedact(req.Messages)
 	} else {
-		sanitizationResult, err = p.sanitizeMessages(req.Messages, sessionID)
+		sanitizationResult, err = p.sanitizeMessages(c.Request.Context(), req.Messages, sessionID)
 	}
 	if err != nil {
 		logger.Error("Sanitization failed", logger.Fields{
 			"error": err.Error(),
 		})
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(statusCodeForSanitizationError(err), gin.H{
 			"error": map[string]any{
 				"message": "Failed to sanitize request",
 				"type":    "internal_error",
@@ -235,7 +236,20 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 			return
 		}
 
-		response = p.resolveResponseIfNeeded(c, response, sessionID)
+		response, err = p.resolveResponseIfNeeded(c, response, sessionID, sanitizationResult.TotalTokenized > 0)
+		if err != nil {
+			logger.Error("Failed to resolve response", logger.Fields{
+				"error":      err.Error(),
+				"session_id": sessionID,
+			})
+			c.JSON(statusCodeForResolutionError(err), gin.H{
+				"error": map[string]any{
+					"message": "Failed to resolve tokenized response",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
 
 		// Add violation headers
 		p.addViolationHeaders(c, sanitizationResult)
@@ -258,9 +272,9 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 type sanitizeTextFunc func(text string) (string, []detector.Violation, int, int, error)
 
 // sanitizeMessages sanitizes all text content in messages
-func (p *Proxy) sanitizeMessages(messages []Message, sessionID string) (*SanitizationResult, error) {
+func (p *Proxy) sanitizeMessages(ctx context.Context, messages []Message, sessionID string) (*SanitizationResult, error) {
 	return p.sanitizeMessagesWith(messages, func(text string) (string, []detector.Violation, int, int, error) {
-		result, err := p.GetSanitizer().SanitizeWithSession(text, sessionID)
+		result, err := p.GetSanitizer().SanitizeWithContext(ctx, text, sessionID)
 		if err != nil {
 			return "", nil, 0, 0, err
 		}
@@ -443,13 +457,13 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 	if req.Stream {
 		sanitizationResult, err = p.sanitizeResponseInputRedact(req.Input)
 	} else {
-		sanitizationResult, err = p.sanitizeResponseInput(req.Input, sessionID)
+		sanitizationResult, err = p.sanitizeResponseInput(c.Request.Context(), req.Input, sessionID)
 	}
 	if err != nil {
 		logger.Error("Sanitization failed", logger.Fields{
 			"error": err.Error(),
 		})
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(statusCodeForSanitizationError(err), gin.H{
 			"error": map[string]any{
 				"message": "Failed to sanitize request",
 				"type":    "internal_error",
@@ -522,7 +536,20 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 		return
 	}
 
-	response = p.resolveResponseIfNeeded(c, response, sessionID)
+	response, err = p.resolveResponseIfNeeded(c, response, sessionID, sanitizationResult.TotalTokenized > 0)
+	if err != nil {
+		logger.Error("Failed to resolve response", logger.Fields{
+			"error":      err.Error(),
+			"session_id": sessionID,
+		})
+		c.JSON(statusCodeForResolutionError(err), gin.H{
+			"error": map[string]any{
+				"message": "Failed to resolve tokenized response",
+				"type":    "internal_error",
+			},
+		})
+		return
+	}
 
 	// Add violation headers
 	p.addResponseViolationHeaders(c, sanitizationResult)
@@ -542,12 +569,25 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 
 }
 
-func (p *Proxy) resolveResponseIfNeeded(c *gin.Context, response []byte, sessionID string) []byte {
+func (p *Proxy) resolveResponseIfNeeded(c *gin.Context, response []byte, sessionID string, requireResolution bool) ([]byte, error) {
 	if p.resolver == nil || p.GetSanitizer().SanitizationMode() != "tokenize" {
-		return response
+		return response, nil
 	}
 
-	resolved, err := p.resolver.ResolveResponse(response, sessionID)
+	if !requireResolution {
+		sessionExists, err := p.GetSanitizer().SessionExists(c.Request.Context(), sessionID)
+		if err != nil {
+			c.Header("X-Eko-Resolve-Status", resolveStatusFromError(err))
+			logger.Warn("Failed to determine session state before resolution", logger.Fields{
+				"error":      err.Error(),
+				"session_id": sessionID,
+			})
+			return nil, err
+		}
+		requireResolution = sessionExists
+	}
+
+	resolved, err := p.resolver.ResolveResponseWithContext(c.Request.Context(), response, sessionID)
 	if err != nil {
 		status := resolveStatusFromError(err)
 		c.Header("X-Eko-Resolve-Status", status)
@@ -555,11 +595,14 @@ func (p *Proxy) resolveResponseIfNeeded(c *gin.Context, response []byte, session
 			"error":      err.Error(),
 			"session_id": sessionID,
 		})
-		return response
+		if requireResolution {
+			return nil, err
+		}
+		return response, nil
 	}
 
 	c.Header("X-Eko-Resolve-Status", "success")
-	return resolved
+	return resolved, nil
 }
 
 func resolveStatusFromError(err error) string {
@@ -570,6 +613,28 @@ func resolveStatusFromError(err error) string {
 		return "no_vault"
 	default:
 		return "error"
+	}
+}
+
+func statusCodeForSanitizationError(err error) int {
+	switch {
+	case errors.Is(err, tokenizer.ErrSessionStoreUnavailable), errors.Is(err, tokenizer.ErrSessionStoreConflict):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func statusCodeForResolutionError(err error) int {
+	switch {
+	case errors.Is(err, tokenizer.ErrSessionStoreUnavailable), errors.Is(err, tokenizer.ErrSessionStoreConflict):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, tokenizer.ErrVaultNotFound), errors.Is(err, tokenizer.ErrSessionExpired):
+		// Permanent for this session — 410 signals "do not retry with this id"
+		// rather than 503 which encourages client retry loops.
+		return http.StatusGone
+	default:
+		return http.StatusInternalServerError
 	}
 }
 
@@ -585,9 +650,9 @@ func (p *Proxy) ensureSessionID(c *gin.Context) string {
 }
 
 // sanitizeResponseInput sanitizes the input field (string or array)
-func (p *Proxy) sanitizeResponseInput(inputRaw json.RawMessage, sessionID string) (*ResponseSanitizationResult, error) {
+func (p *Proxy) sanitizeResponseInput(ctx context.Context, inputRaw json.RawMessage, sessionID string) (*ResponseSanitizationResult, error) {
 	return p.sanitizeResponseInputWith(inputRaw, func(text string) (string, []detector.Violation, int, int, error) {
-		result, err := p.GetSanitizer().SanitizeWithSession(text, sessionID)
+		result, err := p.GetSanitizer().SanitizeWithContext(ctx, text, sessionID)
 		if err != nil {
 			return "", nil, 0, 0, err
 		}

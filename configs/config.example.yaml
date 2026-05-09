@@ -31,7 +31,45 @@ proxy:
     log_requests: true
     add_violation_headers: true
     sanitization_mode: "tokenize"  # Options: redact, tokenize
-    token_ttl_ms: 30000          # Token vault TTL in ms (tokenize mode only)
+    token_store_backend: "memory"  # Options: memory, redis
+    token_ttl_ms: 30000            # Token vault TTL in ms (tokenize mode only)
+
+  redis:
+    addr: "127.0.0.1:6379"
+    username: ""
+    password: ""
+    db: 0
+    key_prefix: "eko:"
+    meta_suffix: "vault_meta:"
+    payload_suffix: "vault_payload:"
+    pool_size: 10
+    min_idle_conns: 2
+    dial_timeout_ms: 100
+    read_timeout_ms: 100
+    write_timeout_ms: 100
+    max_retries: 3
+
+  crypto:
+    provider: "local"            # Options: local, vault-transit
+    active_key_id: "local-dev"
+    # Base64-encoded 32-byte AES key; required for the Redis backend.
+    # SECURITY: do not commit a real key here. Inject via secrets manager
+    # (e.g. Kubernetes Secret, AWS Secrets Manager) at deploy time.
+    local_master_key: ""
+    # Optional fallback keys to allow decrypting payloads sealed with a prior
+    # active_key_id. To rotate: add the current key here, then change
+    # active_key_id + local_master_key to the new pair. Remove the fallback
+    # entry once the session TTL has elapsed for all live sessions.
+    # Example: [{key_id: "local-dev", master_key: "BASE64_PREVIOUS_KEY"}]
+    fallback_keys: []
+    vault_transit:
+      address: "https://vault.example.com"
+      token: ""                  # SECURITY: inject at deploy time, do not commit
+      namespace: ""
+      mount: "transit"
+      key_name: "eko-session"
+      timeout_ms: 2000
+      tls_skip_verify: false     # Leave false in production
 
 # Pattern management
 patterns:

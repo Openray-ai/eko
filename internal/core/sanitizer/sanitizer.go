@@ -1,21 +1,33 @@
 package sanitizer
 
 import (
+	"context"
 	"eko/internal/core/detector"
 	"eko/internal/core/patterns"
 	"eko/internal/core/tokenizer"
 	"eko/internal/helpers/logger"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
 
+// Stores that don't implement ConflictRetrier (e.g. the in-memory vault
+// manager) cannot produce ErrSessionStoreConflict, so a single attempt is
+// sufficient. Redis opts in via ConflictRetries.
+func (s *Sanitizer) tokenizationAttempts() int {
+	if retrier, ok := s.sessionStore.(tokenizer.ConflictRetrier); ok && retrier.ConflictRetries() > 0 {
+		return retrier.ConflictRetries()
+	}
+	return 1
+}
+
 // Sanitizer handles redaction and replacement of sensitive data
 type Sanitizer struct {
 	detector     *detector.Detector
 	tokenizer    *tokenizer.Tokenizer
-	vaultManager *tokenizer.VaultManager
+	sessionStore tokenizer.SessionStore
 	mode         string
 }
 
@@ -40,7 +52,7 @@ func New(det *detector.Detector) *Sanitizer {
 }
 
 // NewWithTokenizer creates a new Sanitizer instance with tokenization support
-func NewWithTokenizer(det *detector.Detector, tok *tokenizer.Tokenizer, vm *tokenizer.VaultManager, mode string) *Sanitizer {
+func NewWithTokenizer(det *detector.Detector, tok *tokenizer.Tokenizer, store tokenizer.SessionStore, mode string) *Sanitizer {
 	if mode == "" {
 		mode = "redact"
 	}
@@ -48,7 +60,7 @@ func NewWithTokenizer(det *detector.Detector, tok *tokenizer.Tokenizer, vm *toke
 	return &Sanitizer{
 		detector:     det,
 		tokenizer:    tok,
-		vaultManager: vm,
+		sessionStore: store,
 		mode:         mode,
 	}
 }
@@ -108,8 +120,19 @@ func (s *Sanitizer) Sanitize(input string) (*Result, error) {
 	}, nil
 }
 
-// SanitizeWithSession detects and sanitizes sensitive data from input with session awareness
+// SanitizeWithSession detects and sanitizes sensitive data from input with session awareness.
+//
+// Deprecated: prefer SanitizeWithContext so cancellation propagates into the
+// session store (Redis dial/read timeouts, Vault Transit calls).
 func (s *Sanitizer) SanitizeWithSession(input, sessionID string) (*Result, error) {
+	return s.SanitizeWithContext(context.TODO(), input, sessionID)
+}
+
+func (s *Sanitizer) SanitizeWithContext(ctx context.Context, input, sessionID string) (*Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	startTime := time.Now()
 
 	violations, err := s.detector.Detect(input)
@@ -140,11 +163,11 @@ func (s *Sanitizer) SanitizeWithSession(input, sessionID string) (*Result, error
 
 	switch mode {
 	case "tokenize":
-		if s.tokenizer == nil || s.vaultManager == nil {
-			return nil, fmt.Errorf("tokenization requires tokenizer and vault manager")
+		if s.tokenizer == nil || s.sessionStore == nil {
+			return nil, fmt.Errorf("tokenization requires tokenizer and session store")
 		}
 		var err error
-		sanitized, tokenizedCount, err = s.tokenizeViolationsWithCount(input, violations, sessionID)
+		sanitized, tokenizedCount, err = s.tokenizeViolationsWithCount(ctx, input, violations, sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -206,14 +229,9 @@ func (s *Sanitizer) redactViolations(input string, violations []detector.Violati
 	return result
 }
 
-func (s *Sanitizer) tokenizeViolationsWithCount(input string, violations []detector.Violation, sessionID string) (string, int, error) {
+func (s *Sanitizer) tokenizeViolationsWithCount(ctx context.Context, input string, violations []detector.Violation, sessionID string) (string, int, error) {
 	if len(violations) == 0 {
 		return input, 0, nil
-	}
-
-	vault, err := s.vaultManager.GetOrCreate(sessionID)
-	if err != nil {
-		return "", 0, err
 	}
 
 	sorted := make([]detector.Violation, len(violations))
@@ -222,33 +240,67 @@ func (s *Sanitizer) tokenizeViolationsWithCount(input string, violations []detec
 		return sorted[i].Position > sorted[j].Position
 	})
 
-	result := input
-	tokenizedCount := 0
-
-	for _, v := range sorted {
-		if v.Severity != patterns.SeverityBlock && v.Severity != patterns.SeverityWarn {
-			continue
+	attempts := s.tokenizationAttempts()
+	for attempt := 0; attempt < attempts; attempt++ {
+		handle, err := s.sessionStore.BeginSession(ctx, sessionID)
+		if err != nil {
+			return "", 0, err
 		}
+		vault := handle.Vault()
+		result := input
+		tokenizedCount := 0
 
-		var replacement string
-		switch v.Type {
-		case patterns.TypeCredential:
-			replacement = s.getRedactionLabel(v.Pattern, v.Type)
-		default:
-			token, err := s.tokenizer.Generate(v, vault)
-			if err != nil {
-				return "", 0, err
+		for _, v := range sorted {
+			if v.Severity != patterns.SeverityBlock && v.Severity != patterns.SeverityWarn {
+				continue
 			}
-			replacement = token
-			tokenizedCount++
+
+			var replacement string
+			switch v.Type {
+			case patterns.TypeCredential:
+				replacement = s.getRedactionLabel(v.Pattern, v.Type)
+			default:
+				token, genErr := s.tokenizer.Generate(v, vault)
+				if genErr != nil {
+					return "", 0, genErr
+				}
+				replacement = token
+				tokenizedCount++
+			}
+
+			if v.Position >= 0 && v.End <= len(result) && v.Position < v.End {
+				result = result[:v.Position] + replacement + result[v.End:]
+			}
 		}
 
-		if v.Position >= 0 && v.End <= len(result) && v.Position < v.End {
-			result = result[:v.Position] + replacement + result[v.End:]
+		if err := handle.Save(ctx); err != nil {
+			if errors.Is(err, tokenizer.ErrSessionStoreConflict) && attempt < attempts-1 {
+				continue
+			}
+			return "", 0, err
 		}
+
+		return result, tokenizedCount, nil
 	}
 
-	return result, tokenizedCount, nil
+	return "", 0, tokenizer.ErrSessionStoreConflict
+}
+
+func (s *Sanitizer) SessionExists(ctx context.Context, sessionID string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.sessionStore == nil {
+		return false, nil
+	}
+
+	exists, err := s.sessionStore.HasSession(ctx, sessionID)
+	switch {
+	case err == nil:
+		return exists, nil
+	default:
+		return false, err
+	}
 }
 
 // getReplacementText returns the replacement text for a violation based on severity

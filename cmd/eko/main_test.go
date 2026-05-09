@@ -25,7 +25,12 @@ func TestServerBootsWithTokenizeMode(t *testing.T) {
 	det := detector.New()
 	loadTestPatterns(t, det)
 
-	san, resolver := buildSanitizer(cfg, det)
+	san, resolver, store := buildSanitizer(cfg, det)
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
 	if resolver == nil {
 		t.Fatal("expected resolver to be initialized for tokenize mode")
 	}
@@ -38,7 +43,7 @@ func TestServerBootsWithTokenizeMode(t *testing.T) {
 		t.Fatal("expected openai proxy to receive resolver")
 	}
 
-	router := buildRouter(san, openaiProxy)
+	router := buildRouter(san, openaiProxy, store)
 	server := httptest.NewServer(router)
 	defer server.Close()
 

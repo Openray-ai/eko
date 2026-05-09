@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -378,8 +379,8 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionExpiredVault(t *testing.T)
 		"Content-Type": "application/json",
 	})
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected status 410, got %d", rec.Code)
 	}
 
 	if got := rec.Header().Get("X-Eko-Resolve-Status"); got != "vault_expired" && got != "no_vault" {
@@ -391,9 +392,8 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionExpiredVault(t *testing.T)
 		t.Fatal("expected token capture to be set")
 	}
 
-	body := rec.Body.String()
-	if !strings.Contains(body, token) {
-		t.Fatalf("expected response to remain unresolved, got %s", body)
+	if strings.Contains(rec.Body.String(), token) {
+		t.Fatalf("expected fail-closed response to avoid unresolved token leakage, got %s", rec.Body.String())
 	}
 }
 
@@ -439,6 +439,73 @@ func TestProxy_TokenizeMode_NonStreamingResponsesResolvesTokens(t *testing.T) {
 	}
 	if strings.Contains(body, token) {
 		t.Fatalf("expected response to not contain token, got %s", body)
+	}
+}
+
+func TestProxy_TokenizeMode_NonStreamingResponsesSanitizeStoreFailureReturns503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	server := newOpenAITestServer()
+	defer server.Close()
+
+	det := detector.New()
+	loadTestPatterns(t, det)
+	tok := tokenizer.NewTokenizer()
+	store := &failingSessionStore{beginErr: tokenizer.ErrSessionStoreUnavailable}
+	san := sanitizer.NewWithTokenizer(det, tok, store, "tokenize")
+	proxy := NewWithResolver(san, nil, server.URL, 5)
+
+	router := gin.New()
+	router.POST("/v1/responses", proxy.HandleResponse)
+
+	rec := performRequest(router, "/v1/responses", `{"model":"gpt","input":"email john@acme.com"}`, map[string]string{
+		"Content-Type": "application/json",
+	})
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+}
+
+func TestProxy_TokenizeMode_ReusesExistingSessionForResolution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	server := newOpenAITestServerWithStaticResponse(`{"choices":[{"message":{"role":"assistant","content":"masked@example.com"}}]}`)
+	defer server.Close()
+
+	det := detector.New()
+	loadTestPatterns(t, det)
+	vm := tokenizer.NewVaultManager(5 * time.Minute)
+	tok := tokenizer.NewTokenizer()
+	sessionID := tokenizer.GenerateSessionID()
+	vault, err := vm.GetOrCreate(sessionID)
+	if err != nil {
+		t.Fatalf("get or create vault: %v", err)
+	}
+	if err := vault.Store("john@acme.com", "masked@example.com"); err != nil {
+		t.Fatalf("store token: %v", err)
+	}
+
+	san := sanitizer.NewWithTokenizer(det, tok, vm, "tokenize")
+	resolver := tokenizer.NewResolver(vm)
+	proxy := NewWithResolver(san, resolver, server.URL, 5)
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", proxy.HandleChatCompletion)
+
+	rec := performRequest(router, "/v1/chat/completions", `{"model":"gpt","messages":[{"role":"user","content":"hello world"}]}`, map[string]string{
+		"Content-Type":     "application/json",
+		"X-Eko-Session-ID": sessionID,
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Eko-Resolve-Status"); got != "success" {
+		t.Fatalf("expected resolve status success, got %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), "john@acme.com") {
+		t.Fatalf("expected prior session token to be resolved, got %s", rec.Body.String())
 	}
 }
 
@@ -585,4 +652,35 @@ func newOpenAITestServerWithStaticResponse(response string) *httptest.Server {
 		_, _ = w.Write([]byte(response))
 	})
 	return httptest.NewServer(mux)
+}
+
+type failingSessionStore struct {
+	beginErr error
+	getErr   error
+}
+
+func (s *failingSessionStore) BeginSession(context.Context, string) (tokenizer.SessionHandle, error) {
+	return nil, s.beginErr
+}
+
+func (s *failingSessionStore) GetSession(context.Context, string) (*tokenizer.Vault, error) {
+	if s.getErr == nil {
+		return nil, tokenizer.ErrVaultNotFound
+	}
+	return nil, s.getErr
+}
+
+func (s *failingSessionStore) HasSession(context.Context, string) (bool, error) {
+	if s.getErr == nil {
+		return false, nil
+	}
+	return false, s.getErr
+}
+
+func (s *failingSessionStore) DeleteSession(context.Context, string) error {
+	return nil
+}
+
+func (s *failingSessionStore) Close() error {
+	return nil
 }

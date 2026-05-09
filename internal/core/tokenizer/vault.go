@@ -1,6 +1,7 @@
 package tokenizer
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -101,7 +102,6 @@ func (vm *VaultManager) GetOrCreate(sessionID string) (*Vault, error) {
 	return vault, nil
 }
 
-
 func (vm *VaultManager) Get(sessionID string) (*Vault, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return nil, err
@@ -126,11 +126,40 @@ func (vm *VaultManager) Get(sessionID string) (*Vault, error) {
 	return vault, nil
 }
 
-func (vm *VaultManager) Delete(sessionID string) {
+func (vm *VaultManager) Delete(sessionID string) error {
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
 
 	delete(vm.vaults, sessionID)
+	return nil
+}
+
+func (vm *VaultManager) BeginSession(_ context.Context, sessionID string) (SessionHandle, error) {
+	vault, err := vm.GetOrCreate(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return &memorySessionHandle{vault: vault}, nil
+}
+
+func (vm *VaultManager) GetSession(_ context.Context, sessionID string) (*Vault, error) {
+	return vm.Get(sessionID)
+}
+
+func (vm *VaultManager) HasSession(_ context.Context, sessionID string) (bool, error) {
+	_, err := vm.Get(sessionID)
+	switch {
+	case err == nil:
+		return true, nil
+	case err == ErrVaultNotFound || err == ErrSessionExpired:
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+func (vm *VaultManager) DeleteSession(_ context.Context, sessionID string) error {
+	return vm.Delete(sessionID)
 }
 
 func (vm *VaultManager) Cleanup() {
@@ -149,6 +178,15 @@ func (vm *VaultManager) Stop() {
 			vm.cleanupTicker.Stop()
 		}
 	})
+}
+
+func (vm *VaultManager) Close() error {
+	vm.Stop()
+	return nil
+}
+
+func (vm *VaultManager) HealthCheck(context.Context) error {
+	return nil
 }
 
 func (vm *VaultManager) startCleanup() {
@@ -290,4 +328,16 @@ func (v *Vault) isExpired(now time.Time) bool {
 	v.mu.RUnlock()
 
 	return !now.Before(expiresAt)
+}
+
+type memorySessionHandle struct {
+	vault *Vault
+}
+
+func (h *memorySessionHandle) Vault() *Vault {
+	return h.vault
+}
+
+func (h *memorySessionHandle) Save(context.Context) error {
+	return nil
 }

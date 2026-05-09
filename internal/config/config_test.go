@@ -73,6 +73,33 @@ func TestDefaultBehaviorConfig(t *testing.T) {
 	if cfg.Proxy.Behavior.TokenTTLms != 30000 {
 		t.Fatalf("token_ttl_ms = %d, want %d", cfg.Proxy.Behavior.TokenTTLms, 30000)
 	}
+	if cfg.Proxy.Behavior.TokenStoreBackend != "memory" {
+		t.Fatalf("token_store_backend = %q, want %q", cfg.Proxy.Behavior.TokenStoreBackend, "memory")
+	}
+	if cfg.Proxy.Redis.MetaSuffix != "vault_meta:" {
+		t.Fatalf("meta_suffix = %q, want %q", cfg.Proxy.Redis.MetaSuffix, "vault_meta:")
+	}
+	if cfg.Proxy.Redis.PayloadSuffix != "vault_payload:" {
+		t.Fatalf("payload_suffix = %q, want %q", cfg.Proxy.Redis.PayloadSuffix, "vault_payload:")
+	}
+	if cfg.Proxy.Crypto.Provider != "local" {
+		t.Fatalf("crypto.provider = %q, want %q", cfg.Proxy.Crypto.Provider, "local")
+	}
+	if cfg.Proxy.Crypto.VaultTransit.Mount != "transit" {
+		t.Fatalf("vault_transit.mount = %q, want %q", cfg.Proxy.Crypto.VaultTransit.Mount, "transit")
+	}
+	if cfg.Proxy.Crypto.VaultTransit.KeyName != "eko-session" {
+		t.Fatalf("vault_transit.key_name = %q, want %q", cfg.Proxy.Crypto.VaultTransit.KeyName, "eko-session")
+	}
+}
+
+func TestLoadBehaviorConfig_InvalidBackend(t *testing.T) {
+	path := writeTempConfig(t, "proxy:\n  behavior:\n    token_store_backend: \"bad\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected invalid backend to fail")
+	}
 }
 
 func writeTempConfig(t *testing.T, content string) string {
