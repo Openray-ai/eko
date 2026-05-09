@@ -61,6 +61,7 @@ func main() {
 		"address":            addr,
 		"health_endpoint":    "http://localhost:8080/health",
 		"readiness_endpoint": "http://localhost:8080/ready",
+		"metrics_endpoint":   "GET http://localhost:8080/metrics",
 		"sanitize_endpoint":  "POST http://localhost:8080/v1/sanitize",
 	}
 
@@ -109,15 +110,17 @@ func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *to
 }
 
 func buildRouter(san *sanitizer.Sanitizer, openaiProxy *openai.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
+	metrics := handlers.NewMetricsCollector()
 	sanitizeHandler := handlers.NewSanitizeHandler(san)
 	var healthChecker tokenizer.HealthChecker
 	if checker, ok := sessionStore.(tokenizer.HealthChecker); ok {
 		healthChecker = checker
 	}
 	healthHandler := handlers.NewHealthHandler(healthChecker)
+	metricsHandler := handlers.NewMetricsHandler(metrics)
 
 	router := gin.New()
-	routes.SetupRoutes(router, sanitizeHandler, healthHandler, openaiProxy)
+	routes.SetupRoutes(router, sanitizeHandler, healthHandler, metricsHandler, openaiProxy)
 	return router
 }
 

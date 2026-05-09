@@ -2,7 +2,7 @@
 
 > Blazing-fast prompt sanitization for AI - Prevent data leaks before they happen
 
-**Ekō** is an open-source security layer that protects your organization from accidentally leaking sensitive data to AI services. Built in Go for maximum performance, it acts as a transparent proxy between your applications and AI providers (OpenAI, Anthropic, Google AI), automatically detecting and sanitizing credentials, PII, and business secrets in real-time.
+**Ekō** is an open-source security layer that protects your organization from accidentally leaking sensitive data to AI services. Built in Go for maximum performance, it acts as a transparent proxy between your applications and AI providers (OpenAI, with Anthropic and Google AI coming soon), automatically detecting and sanitizing credentials, PII, and business secrets in real-time.
 
 ---
 
@@ -121,29 +121,18 @@ if violations and int(violations) > 0:
     print(f"⚠️ Ekō sanitized {violations} sensitive items")
 ```
 
-**Python Integration (Anthropic):**
+**Python Integration (Anthropic) — coming soon:**
 ```python
-import anthropic
-
-client = anthropic.Anthropic(
-    api_key="sk-ant-your-key",
-    base_url="http://localhost:8080/v1/anthropic"  # ← Point to Ekō
-)
-
-message = client.messages.create(
-    model="claude-sonnet-4-20250514",
-    messages=[{"role": "user", "content": "My API key is sk-proj-abc123"}]
-)
-# Ekō automatically sanitizes before sending to Anthropic
+# Anthropic proxy support is on the roadmap.
+# For now, use the Core API (Option 2 below) to sanitize prompts before
+# passing them to the Anthropic SDK directly.
 ```
 
-**Environment Variables (Universal):**
+**Environment Variables (OpenAI):**
 ```bash
-# Works with any SDK/library
 export OPENAI_BASE_URL="http://localhost:8080/v1/openai"
-export ANTHROPIC_BASE_URL="http://localhost:8080/v1/anthropic"
 
-# Now all AI calls are automatically protected
+# Now all OpenAI calls are automatically protected
 ```
 
 ### Option 2: Core API (Custom Integrations)
@@ -255,11 +244,9 @@ proxy:
   openai:
     enabled: true
     base_url: "https://api.openai.com/v1"
-    
-  anthropic:
-    enabled: true
-    base_url: "https://api.anthropic.com/v1"
-    
+
+  # anthropic and google proxies: coming in Phase 2
+
   behavior:
     on_violation: "sanitize"  # Options: block, sanitize, warn
     log_requests: true
@@ -455,10 +442,58 @@ chmod +x eko-linux-amd64
 ## 📊 Monitoring & Compliance
 
 ### Built-in Metrics
-```bash
-# Prometheus metrics
-curl http://localhost:8080/metrics
 
+Ekō exposes a Prometheus-compatible plaintext metrics endpoint:
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+Example output:
+```
+# HELP eko_requests_total Total number of HTTP requests received
+# TYPE eko_requests_total counter
+eko_requests_total 1024
+
+# HELP eko_sanitizations_total Total number of sanitization operations performed
+# TYPE eko_sanitizations_total counter
+eko_sanitizations_total 987
+
+# HELP eko_violations_total Total number of violations detected across all sanitizations
+# TYPE eko_violations_total counter
+eko_violations_total 312
+
+# HELP eko_errors_total Total number of errors encountered during sanitization
+# TYPE eko_errors_total counter
+eko_errors_total 2
+
+# HELP eko_uptime_seconds Number of seconds since the process started
+# TYPE eko_uptime_seconds gauge
+eko_uptime_seconds 3600.00
+
+# HELP eko_goroutines Current number of goroutines
+# TYPE eko_goroutines gauge
+eko_goroutines 14
+
+# HELP eko_memory_alloc_bytes Currently allocated heap memory in bytes
+# TYPE eko_memory_alloc_bytes gauge
+eko_memory_alloc_bytes 4823040
+
+# HELP eko_memory_sys_bytes Total memory obtained from the OS in bytes
+# TYPE eko_memory_sys_bytes gauge
+eko_memory_sys_bytes 24379392
+```
+
+These metrics can be scraped directly by Prometheus. Add Ekō to your `prometheus.yml`:
+```yaml
+scrape_configs:
+  - job_name: 'eko'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: /metrics
+```
+
+```bash
 # Health check
 curl http://localhost:8080/health
 curl http://localhost:8080/ready
@@ -577,12 +612,13 @@ Legal     → Ekō → Local LLM (stays on-prem)
 **✅ Phase 1: Core (Current)**
 - Core detection engine
 - OpenAI proxy
-- Anthropic proxy
-- Google AI proxy
-- African-specific patterns
+- African-specific patterns (BVN, M-Pesa, NUBAN, regional phones)
+- Prometheus-compatible metrics endpoint
 - Docker deployment
 
 **🚧 Phase 2: Enterprise (Next)**
+- Anthropic proxy
+- Google AI proxy
 - Open WebUI integration
 - Admin dashboard
 - SSO integration (SAML, LDAP, AD)

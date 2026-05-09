@@ -48,22 +48,79 @@ func (v normalizedView) mapRange(start, end int) (int, int, bool) {
 	return origStart, origEnd, true
 }
 
-func (d *Detector) detectAdvanced(input string, patternMap map[string]*patterns.CompiledPattern) []Violation {
-	violations := make([]Violation, 0)
-	violations = append(violations, d.detectCanonicalEmails(input, patternMap)...)
-	violations = append(violations, d.detectPhonesWithSeparators(input, patternMap)...)
-	violations = append(violations, d.detectCreditCardsWithSeparators(input, patternMap)...)
-	violations = append(violations, d.detectCanonicalIBAN(input, patternMap)...)
-	violations = append(violations, d.detectObfuscatedPasswordAssignments(input, patternMap)...)
-	violations = append(violations, d.detectSplitEmails(input, patternMap)...)
-	violations = append(violations, d.detectBase64EncodedSecrets(input)...)
-	violations = append(violations, d.detectEscapedCredentialURIs(input, patternMap)...)
+// advancedParallelThreshold is the minimum input length in bytes at which
+// concurrent execution of the advanced detectors pays off relative to
+// goroutine-spawn overhead. Below this threshold the methods run sequentially
+// on the calling goroutine. Above it they run concurrently, bounded by the
+// request-local semaphore passed in from Detect().
+const advancedParallelThreshold = 32 * 1024 // 32 KB
+
+func (d *Detector) detectAdvanced(input string, patternMap map[string]*patterns.CompiledPattern, sem chan struct{}) []Violation {
+	funcs := [8]func() []Violation{
+		func() []Violation { return d.detectCanonicalEmails(input, patternMap) },
+		func() []Violation { return d.detectPhonesWithSeparators(input, patternMap) },
+		func() []Violation { return d.detectCreditCardsWithSeparators(input, patternMap) },
+		func() []Violation { return d.detectCanonicalIBAN(input, patternMap) },
+		func() []Violation { return d.detectObfuscatedPasswordAssignments(input, patternMap) },
+		func() []Violation { return d.detectSplitEmails(input, patternMap) },
+		func() []Violation { return d.detectBase64EncodedSecrets(input) },
+		func() []Violation { return d.detectEscapedCredentialURIs(input, patternMap) },
+	}
+
+	if len(input) < advancedParallelThreshold {
+		// Sequential path: no goroutine overhead for small inputs where the
+		// spawn cost would dwarf the work done by each method.
+		var violations []Violation
+		for _, fn := range funcs {
+			violations = append(violations, fn()...)
+		}
+		return violations
+	}
+
+	// Parallel path: inputs >= 32 KB. Reuse the request-local semaphore from
+	// Detect() so that advanced detection shares the same per-call worker
+	// budget as pattern matching. By the time this is reached all pattern
+	// goroutines have finished and released their slots, so the full budget
+	// is available for the advanced phase.
+	ch := make(chan []Violation, len(funcs))
+	for _, fn := range funcs {
+		fn := fn
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			ch <- fn()
+		}()
+	}
+	var violations []Violation
+	for range funcs {
+		violations = append(violations, (<-ch)...)
+	}
 	return violations
+}
+
+// needsEmailCanonicalization reports whether input contains percent-encoded sequences
+// or non-ASCII bytes that could be Unicode confusables.
+func needsEmailCanonicalization(input string) bool {
+	for i := 0; i < len(input); i++ {
+		b := input[i]
+		if b == '%' && i+2 < len(input) && isHex(input[i+1]) && isHex(input[i+2]) {
+			return true
+		}
+		if b > 0x7F {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Detector) detectCanonicalEmails(input string, patternMap map[string]*patterns.CompiledPattern) []Violation {
 	pattern := patternMap[patterns.PatternEmail]
 	if pattern == nil {
+		return nil
+	}
+
+	// Plain ASCII input: emails already caught by the concurrent regex phase.
+	if !needsEmailCanonicalization(input) {
 		return nil
 	}
 
@@ -109,9 +166,9 @@ func canonicalizeForEmail(input string) normalizedView {
 
 		r, size := utf8.DecodeRuneInString(input[i:])
 		folded := foldConfusableRune(r)
-		buf := make([]byte, utf8.RuneLen(folded))
-		utf8.EncodeRune(buf, folded)
-		for _, b := range buf {
+		var buf [4]byte
+		n := utf8.EncodeRune(buf[:], folded)
+		for _, b := range buf[:n] {
 			text = append(text, b)
 			starts = append(starts, i)
 			ends = append(ends, i+size)
@@ -478,7 +535,29 @@ func (d *Detector) detectBase64EncodedSecrets(input string) []Violation {
 	return violations
 }
 
+// needsWhitespaceCollapse reports whether input contains literal whitespace control
+// characters or their backslash-escaped equivalents that collapseEscapedWhitespace strips.
+func needsWhitespaceCollapse(input string) bool {
+	for i := 0; i < len(input); i++ {
+		b := input[i]
+		if b == '\n' || b == '\r' || b == '\t' {
+			return true
+		}
+		if b == '\\' && i+1 < len(input) {
+			next := input[i+1]
+			if next == 'n' || next == 'r' || next == 't' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (d *Detector) detectEscapedCredentialURIs(input string, patternMap map[string]*patterns.CompiledPattern) []Violation {
+	if !needsWhitespaceCollapse(input) {
+		return nil
+	}
+
 	view := collapseEscapedWhitespace(input)
 	if view.text == input {
 		return nil
@@ -526,9 +605,9 @@ func collapseEscapedWhitespace(input string) normalizedView {
 			i += size
 			continue
 		}
-		buf := make([]byte, utf8.RuneLen(r))
-		utf8.EncodeRune(buf, r)
-		for _, b := range buf {
+		var buf [4]byte
+		n := utf8.EncodeRune(buf[:], r)
+		for _, b := range buf[:n] {
 			text = append(text, b)
 			starts = append(starts, i)
 			ends = append(ends, i+size)
