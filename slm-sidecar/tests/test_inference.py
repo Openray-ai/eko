@@ -46,8 +46,13 @@ def test_byte_to_char_roundtrip():
 
 
 def test_strip_bio():
+    # BIO prefixes
     assert _strip_bio("B-private_phone") == "private_phone"
     assert _strip_bio("I-private_phone") == "private_phone"
+    # BILOU prefixes — used by iamSamurai/privacy-filter-nigeria
+    assert _strip_bio("L-private_phone") == "private_phone"
+    assert _strip_bio("U-private_phone") == "private_phone"
+    # No prefix
     assert _strip_bio("private_phone") == "private_phone"
     assert _strip_bio("O") == "O"
 
@@ -66,12 +71,13 @@ def _make_engine(id2label: dict[int, str]) -> InferenceEngine:
 
 def test_extract_spans_basic():
     """Two consecutive person tokens fold into one span across the whitespace."""
-    eng = _make_engine({0: "O", 1: "private_person"})
+    # B-private_person then I-private_person continues the same span.
+    eng = _make_engine({0: "O", 1: "B-private_person", 2: "I-private_person"})
     text = "Amina Yusuf called."
     # Pretend the tokenizer split into [CLS, "Amina", " Yusuf", " called", ".", SEP]
     offsets = [(0, 0), (0, 5), (5, 11), (11, 18), (18, 19), (0, 0)]
     attention = [1, 1, 1, 1, 1, 1]
-    label_ids = [0, 1, 1, 0, 0, 0]
+    label_ids = [0, 1, 2, 0, 0, 0]
     scores = [0.9, 0.95, 0.92, 0.9, 0.9, 0.9]
 
     spans = eng._extract_spans(text, [list(o) for o in offsets], attention, label_ids, scores)
@@ -81,6 +87,49 @@ def test_extract_spans_basic():
     assert s.start == 0  # byte offset
     assert s.end == 11
     assert text[s.start : s.end] == "Amina Yusuf"
+
+
+def test_extract_spans_adjacent_b_tags_split():
+    """Two B-X tokens in a row produce TWO spans (BIOES correctness)."""
+    eng = _make_engine({0: "O", 1: "B-private_person"})
+    text = "Amina Yusuf"
+    offsets = [(0, 0), (0, 5), (6, 11), (0, 0)]
+    attention = [1, 1, 1, 1]
+    label_ids = [0, 1, 1, 0]  # both labelled as B- → two distinct people
+    scores = [0.9, 0.9, 0.9, 0.9]
+    spans = eng._extract_spans(text, [list(o) for o in offsets], attention, label_ids, scores)
+    assert len(spans) == 2
+    assert spans[0].label == "private_person"
+    assert spans[1].label == "private_person"
+    assert text[spans[0].start : spans[0].end] == "Amina"
+    assert text[spans[1].start : spans[1].end] == "Yusuf"
+
+
+def test_extract_spans_unit_tag_is_singleton():
+    """U-X (BILOU) and S-X (BIOES) emit a span and immediately close."""
+    eng = _make_engine({0: "O", 1: "U-private_person", 2: "B-private_phone"})
+    text = "Amina +234"
+    offsets = [(0, 0), (0, 5), (6, 10), (0, 0)]
+    attention = [1, 1, 1, 1]
+    label_ids = [0, 1, 2, 0]
+    scores = [0.9, 0.9, 0.9, 0.9]
+    spans = eng._extract_spans(text, [list(o) for o in offsets], attention, label_ids, scores)
+    assert [s.label for s in spans] == ["private_person", "private_phone"]
+
+
+def test_extract_spans_e_tag_closes_span():
+    """E-X (BIOES) closes the span immediately after appending."""
+    eng = _make_engine({0: "O", 1: "B-private_person", 2: "E-private_person", 3: "B-private_phone"})
+    text = "Amina Y +234"
+    offsets = [(0, 0), (0, 5), (6, 7), (8, 12), (0, 0)]
+    attention = [1, 1, 1, 1, 1]
+    label_ids = [0, 1, 2, 3, 0]
+    scores = [0.9, 0.9, 0.9, 0.9, 0.9]
+    spans = eng._extract_spans(text, [list(o) for o in offsets], attention, label_ids, scores)
+    assert len(spans) == 2
+    assert spans[0].label == "private_person"
+    assert text[spans[0].start : spans[0].end] == "Amina Y"
+    assert spans[1].label == "private_phone"
 
 
 def test_extract_spans_handles_bio_prefixes():
@@ -98,7 +147,7 @@ def test_extract_spans_handles_bio_prefixes():
 
 
 def test_extract_spans_separates_different_labels():
-    eng = _make_engine({0: "O", 1: "private_person", 2: "private_phone"})
+    eng = _make_engine({0: "O", 1: "B-private_person", 2: "B-private_phone"})
     text = "Amina +234"
     offsets = [(0, 0), (0, 5), (6, 10), (0, 0)]
     attention = [1, 1, 1, 1]
@@ -113,7 +162,7 @@ def test_extract_spans_separates_different_labels():
 
 def test_extract_spans_byte_offsets_for_unicode():
     """Byte offsets must match UTF-8 byte positions for non-ASCII text."""
-    eng = _make_engine({0: "O", 1: "private_person"})
+    eng = _make_engine({0: "O", 1: "B-private_person"})
     text = "Yùsuf"  # 'ù' is two UTF-8 bytes
     # Pretend tokenizer kept it as one piece.
     offsets = [(0, 0), (0, 5), (0, 0)]
@@ -129,7 +178,7 @@ def test_extract_spans_byte_offsets_for_unicode():
 
 
 def test_extract_spans_skips_padding_tokens():
-    eng = _make_engine({0: "O", 1: "private_person"})
+    eng = _make_engine({0: "O", 1: "B-private_person"})
     text = "Hi"
     offsets = [(0, 0), (0, 2), (0, 0), (0, 0)]
     attention = [1, 1, 0, 0]  # last two are padding
