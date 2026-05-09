@@ -491,6 +491,64 @@ func TestRedisStoreCryptoFailurePreservesCiphertext(t *testing.T) {
 	}
 }
 
+func TestRedisStoreDecryptCorruptionDeletesKeys(t *testing.T) {
+	mini := miniredis.RunT(t)
+
+	store, err := NewRedisStore(RedisStoreConfig{
+		Addr:          mini.Addr(),
+		KeyPrefix:     "test:",
+		MetaSuffix:    "meta:",
+		PayloadSuffix: "payload:",
+		TTL:           time.Minute,
+		MaxTokens:     10,
+		HealthTimeout: time.Second,
+		KeyProvider:   testKeyProvider(t),
+	})
+	if err != nil {
+		t.Fatalf("new redis store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	handle, err := store.BeginSession(context.Background(), resolverSessionID)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := handle.Vault().Store("john@acme.com", "masked@example.com"); err != nil {
+		t.Fatalf("store token: %v", err)
+	}
+	if err := handle.Save(context.Background()); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Mutate meta so its key_id no longer matches the payload's. decryptPayload
+	// surfaces this as ErrSessionStoreCorrupted, and handleDecryptFailure should
+	// delete the keys (the corruption arm, distinct from the crypto-failure arm).
+	metaKey := "test:meta:" + resolverSessionID
+	payloadKey := "test:payload:" + resolverSessionID
+	rawMeta, err := mini.Get(metaKey)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	var meta redisVaultMeta
+	if err := json.Unmarshal([]byte(rawMeta), &meta); err != nil {
+		t.Fatalf("decode meta: %v", err)
+	}
+	meta.KeyID = "mismatched-key-id"
+	tampered, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("re-encode meta: %v", err)
+	}
+	mini.Set(metaKey, string(tampered))
+
+	_, err = store.GetSession(context.Background(), resolverSessionID)
+	if !errors.Is(err, ErrSessionStoreCorrupted) {
+		t.Fatalf("expected corrupted error, got %v", err)
+	}
+	if mini.Exists(metaKey) || mini.Exists(payloadKey) {
+		t.Fatal("expected corrupted session keys to be deleted")
+	}
+}
+
 func TestStaticKeyProviderFallbackDecryptsRotatedKey(t *testing.T) {
 	oldKey := make([]byte, aeadKeySize)
 	newKey := make([]byte, aeadKeySize)

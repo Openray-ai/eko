@@ -192,16 +192,23 @@ func (s *RedisStore) GetSession(ctx context.Context, sessionID string) (*Vault, 
 // unrecoverable and gets cleaned up; AEAD or unknown-key-id failures may
 // indicate a key misconfiguration during rotation, so the ciphertext is
 // preserved and the failure is logged at ERROR level for operator action.
+// Any other error class (e.g. transient unavailability) is left alone — the
+// caller still propagates it — but logged at WARN so silent fallthroughs are
+// visible if a new error class is added to decryptPayload later.
 func (s *RedisStore) handleDecryptFailure(ctx context.Context, sessionID string, err error) {
-	if errors.Is(err, ErrSessionStoreCryptoFailure) {
-		logger.Error("Session payload failed AEAD verification; preserving ciphertext", logger.Fields{
+	switch {
+	case errors.Is(err, ErrSessionStoreCryptoFailure):
+		logger.Error("Session payload could not be decrypted; preserving ciphertext", logger.Fields{
 			"error":      err.Error(),
 			"session_id": sessionID,
 		})
-		return
-	}
-	if errors.Is(err, ErrSessionStoreCorrupted) {
+	case errors.Is(err, ErrSessionStoreCorrupted):
 		_ = s.deleteKeys(ctx, sessionID)
+	default:
+		logger.Warn("Session payload decrypt failed with unexpected error class; preserving ciphertext", logger.Fields{
+			"error":      err.Error(),
+			"session_id": sessionID,
+		})
 	}
 }
 
