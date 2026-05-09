@@ -1,6 +1,7 @@
 package main
 
 import (
+	"eko/internal/api/handlers"
 	"eko/internal/config"
 	"eko/internal/core/detector"
 	"eko/internal/core/patterns"
@@ -43,7 +44,8 @@ func TestServerBootsWithTokenizeMode(t *testing.T) {
 		t.Fatal("expected openai proxy to receive resolver")
 	}
 
-	router := buildRouter(san, openaiProxy, store)
+	metrics := handlers.NewMetricsCollector()
+	router := buildRouter(metrics, san, openaiProxy, store)
 	server := httptest.NewServer(router)
 	defer server.Close()
 

@@ -49,6 +49,23 @@ proxy:
     write_timeout_ms: 100
     max_retries: 3
 
+  # Optional Small Language Model contextual detector. When enabled, Ekō calls
+  # the slm-sidecar service in parallel with regex matching and merges results
+  # through the same redaction/tokenization pipeline. See slm-sidecar/README.md.
+  slm:
+    enabled: false
+    endpoint: "http://slm-sidecar:8000"
+    timeout_ms: 800
+    max_input_bytes: 16384       # skip SLM call for inputs larger than this
+    breaker:
+      failure_threshold: 5       # consecutive failures before tripping
+      cooldown_ms: 30000         # how long to skip SLM after tripping
+    # Optional per-label overrides. Empty fields fall back to defaults.
+    # See internal/core/slm/mapping.go for the full default table.
+    # labels:
+    #   private_phone: { severity: "BLOCK" }
+    #   private_url:   { severity: "WARN" }
+
   crypto:
     provider: "local"            # Options: local, vault-transit
     active_key_id: "local-dev"

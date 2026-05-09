@@ -154,7 +154,7 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 	var sanitizationResult *SanitizationResult
 	var err error
 	if req.Stream {
-		sanitizationResult, err = p.sanitizeMessagesRedact(req.Messages)
+		sanitizationResult, err = p.sanitizeMessagesRedact(c.Request.Context(), req.Messages)
 	} else {
 		sanitizationResult, err = p.sanitizeMessages(c.Request.Context(), req.Messages, sessionID)
 	}
@@ -283,9 +283,11 @@ func (p *Proxy) sanitizeMessages(ctx context.Context, messages []Message, sessio
 	}, true)
 }
 
-func (p *Proxy) sanitizeMessagesRedact(messages []Message) (*SanitizationResult, error) {
+func (p *Proxy) sanitizeMessagesRedact(ctx context.Context, messages []Message) (*SanitizationResult, error) {
 	return p.sanitizeMessagesWith(messages, func(text string) (string, []detector.Violation, int, int, error) {
-		result, err := p.GetSanitizer().Sanitize(text)
+		// Pass ctx through SanitizeRedactWithContext so request cancellation
+		// propagates into the detector (and SLM HTTP call when configured).
+		result, err := p.GetSanitizer().SanitizeRedactWithContext(ctx, text)
 		if err != nil {
 			return "", nil, 0, 0, err
 		}

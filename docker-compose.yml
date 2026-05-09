@@ -81,7 +81,80 @@ services:
     networks:
       - eko-network
 
+    # The slm-sidecar dependency is soft-required: when proxy.slm.enabled is
+    # false (default), the sidecar service can be omitted entirely. When
+    # enabled, Ekō waits for the sidecar's /healthz to return 200 before
+    # serving traffic.
+    depends_on:
+      slm-sidecar:
+        condition: service_healthy
+        required: false
+
+  # ========================================================================
+  # Optional SLM sidecar (Phase 3 contextual detection)
+  #
+  # Loads `openai/privacy-filter` + `iamSamurai/privacy-filter-nigeria` and
+  # exposes /predict + /predict_batch over HTTP/JSON. Only needed when
+  # `proxy.slm.enabled: true` in configs/config.yaml. See slm-sidecar/README.md.
+  # First boot pulls the model from Hugging Face; expect 60-120s before the
+  # health check goes green.
+  # ========================================================================
+  slm-sidecar:
+    # Behind the "slm" profile so default `docker compose up` doesn't pull the
+    # ~2 GB torch+transformers image. Operators who set proxy.slm.enabled: true
+    # in configs/config.yaml run `docker compose --profile slm up`.
+    profiles: ["slm"]
+
+    build:
+      context: ./slm-sidecar
+      dockerfile: Dockerfile
+    image: openray/eko-slm-sidecar:latest
+    container_name: eko-slm-sidecar
+
+    environment:
+      - PRIVACY_FILTER_MODEL_NAME=openai/privacy-filter
+      - PRIVACY_FILTER_ADAPTER_NAME=iamSamurai/privacy-filter-nigeria
+      - PRIVACY_FILTER_DEVICE=cpu
+      # Hugging Face cache; persist across restarts to avoid re-downloading.
+      - HF_HOME=/root/.cache/huggingface
+
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/healthz'); sys.exit(0 if r.status == 200 else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - eko-network
+
 networks:
   eko-network:
     driver: bridge
     name: eko-network
+
+volumes:
+  hf-cache:
+    name: eko-hf-cache

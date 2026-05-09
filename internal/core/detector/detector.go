@@ -1,16 +1,28 @@
 package detector
 
 import (
-	"eko/internal/core/patterns"
-	"eko/internal/helpers/logger"
+	"context"
 	"runtime"
 	"sort"
 	"sync"
+
+	"eko/internal/core/patterns"
+	"eko/internal/core/slm"
+	"eko/internal/helpers/logger"
 )
+
+// SLMRunner is the contract the detector uses for an optional contextual
+// detection source (e.g. the slm-sidecar). Implementations are expected to be
+// safe for concurrent use and to return (nil, nil) for soft failures (breaker
+// open, oversize input) so the detector can proceed with regex-only results.
+type SLMRunner interface {
+	Detect(ctx context.Context, input string) ([]slm.Violation, error)
+}
 
 // Detector handles pattern matching and violation detection
 type Detector struct {
 	patterns map[string]*patterns.CompiledPattern
+	slm      SLMRunner
 	mu       sync.RWMutex
 }
 
@@ -31,8 +43,25 @@ func New() *Detector {
 	}
 }
 
-// Detect scans input text for sensitive patterns using concurrent processing
+// SetSLM attaches an optional SLM runner. The detector takes a copy of the
+// reference; callers may pass nil to disable. Safe to call before Detect calls
+// begin; not designed to be swapped at runtime.
+func (d *Detector) SetSLM(runner SLMRunner) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.slm = runner
+}
+
+// Detect scans input text for sensitive patterns. Equivalent to
+// DetectWithContext(context.Background(), input); kept for callers that don't
+// have a context to pass.
 func (d *Detector) Detect(input string) ([]Violation, error) {
+	return d.DetectWithContext(context.Background(), input)
+}
+
+// DetectWithContext runs regex pattern matching and (when configured) the SLM
+// runner concurrently, then merges and deduplicates the combined violations.
+func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Violation, error) {
 	d.mu.RLock()
 	patternList := make([]*patterns.CompiledPattern, 0, len(d.patterns))
 	patternMap := make(map[string]*patterns.CompiledPattern, len(d.patterns))
@@ -40,6 +69,7 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 		patternList = append(patternList, p)
 		patternMap[p.Name] = p
 	}
+	slmRunner := d.slm
 	d.mu.RUnlock()
 
 	if len(patternList) == 0 {
@@ -60,8 +90,12 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 	}
 	sem := make(chan struct{}, workers)
 
-	// Channel to collect violations from goroutines
-	violationsChan := make(chan []Violation, len(patternList))
+	// Channel to collect violations from goroutines (regex patterns + optional SLM)
+	chanCap := len(patternList)
+	if slmRunner != nil {
+		chanCap++
+	}
+	violationsChan := make(chan []Violation, chanCap)
 	var wg sync.WaitGroup
 
 	// Process each pattern concurrently, bounded by the request-local semaphore.
@@ -74,6 +108,25 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 			violations := d.detectPattern(input, p)
 			violationsChan <- violations
 		}(pattern)
+	}
+
+	// Run the optional SLM runner alongside the regex pool. It does not consume
+	// from the regex semaphore — its bottleneck is a single network call, not
+	// CPU-bound goroutines, so it doesn't compete with regex workers.
+	if slmRunner != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slmViolations, err := slmRunner.Detect(ctx, input)
+			if err != nil {
+				logger.Warn("SLM detection failed; using regex-only results", logger.Fields{
+					"error": err.Error(),
+				})
+				violationsChan <- nil
+				return
+			}
+			violationsChan <- convertSLMViolations(slmViolations)
+		}()
 	}
 
 	// Wait for all goroutines to complete and close channel
@@ -104,6 +157,27 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 	})
 
 	return deduped, nil
+}
+
+// convertSLMViolations adapts the slm package's Violation type into the
+// detector's. Kept inline so the slm package doesn't need to know about
+// detector and we don't need a third bridge package.
+func convertSLMViolations(in []slm.Violation) []Violation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Violation, 0, len(in))
+	for _, v := range in {
+		out = append(out, Violation{
+			Type:     v.Type,
+			Severity: v.Severity,
+			Pattern:  v.Pattern,
+			Matched:  v.Matched,
+			Position: v.Position,
+			End:      v.End,
+		})
+	}
+	return out
 }
 
 // detectPattern finds all matches for a single pattern

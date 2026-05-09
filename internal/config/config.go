@@ -46,6 +46,32 @@ type ProxyConfig struct {
 	Behavior  BehaviorConfig `yaml:"behavior"`
 	Redis     RedisConfig    `yaml:"redis"`
 	Crypto    CryptoConfig   `yaml:"crypto"`
+	SLM       SLMConfig      `yaml:"slm"`
+}
+
+// SLMConfig configures the optional Small Language Model contextual detector.
+// When Enabled is false (default), Ekō runs regex-only detection unchanged.
+type SLMConfig struct {
+	Enabled       bool                        `yaml:"enabled"`
+	Endpoint      string                      `yaml:"endpoint"`        // default "http://slm-sidecar:8000"
+	TimeoutMs     int                         `yaml:"timeout_ms"`      // default 800
+	MaxInputBytes int                         `yaml:"max_input_bytes"` // default 16384; skip SLM for larger inputs
+	Breaker       SLMBreakerConfig            `yaml:"breaker"`
+	Labels        map[string]SLMLabelOverride `yaml:"labels"` // optional override of default mapping
+}
+
+// SLMBreakerConfig configures the in-process circuit breaker for SLM calls.
+type SLMBreakerConfig struct {
+	FailureThreshold int `yaml:"failure_threshold"` // default 5
+	CooldownMs       int `yaml:"cooldown_ms"`       // default 30000
+}
+
+// SLMLabelOverride lets operators remap a single SLM span label.
+// Empty fields fall back to the default mapping for that label.
+type SLMLabelOverride struct {
+	Type     string `yaml:"type"`
+	Severity string `yaml:"severity"`
+	Pattern  string `yaml:"pattern"`
 }
 
 // ProviderConfig holds provider-specific configuration
@@ -157,8 +183,12 @@ func Load(filename string) (*Config, error) {
 
 	applyBehaviorDefaults(&config.Proxy.Behavior)
 	applyProxyDefaults(&config.Proxy)
+	applySLMDefaults(&config.Proxy.SLM)
 	if err := validateBehaviorConfig(config.Proxy.Behavior); err != nil {
 		return nil, fmt.Errorf("invalid behavior config: %w", err)
+	}
+	if err := validateSLMConfig(config.Proxy.SLM); err != nil {
+		return nil, fmt.Errorf("invalid slm config: %w", err)
 	}
 
 	return &config, nil
@@ -273,6 +303,51 @@ func applyProxyDefaults(cfg *ProxyConfig) {
 	if cfg.Crypto.VaultTransit.TimeoutMs == 0 {
 		cfg.Crypto.VaultTransit.TimeoutMs = 2000
 	}
+}
+
+func applySLMDefaults(cfg *SLMConfig) {
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = "http://slm-sidecar:8000"
+	}
+	if cfg.TimeoutMs == 0 {
+		cfg.TimeoutMs = 800
+	}
+	if cfg.MaxInputBytes == 0 {
+		cfg.MaxInputBytes = 16384
+	}
+	if cfg.Breaker.FailureThreshold == 0 {
+		cfg.Breaker.FailureThreshold = 5
+	}
+	if cfg.Breaker.CooldownMs == 0 {
+		cfg.Breaker.CooldownMs = 30000
+	}
+}
+
+func validateSLMConfig(cfg SLMConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("endpoint is required when slm.enabled is true")
+	}
+	if cfg.TimeoutMs <= 0 {
+		return fmt.Errorf("timeout_ms must be > 0")
+	}
+	if cfg.MaxInputBytes < 0 {
+		return fmt.Errorf("max_input_bytes must be >= 0")
+	}
+	if cfg.Breaker.FailureThreshold <= 0 {
+		return fmt.Errorf("breaker.failure_threshold must be > 0")
+	}
+	if cfg.Breaker.CooldownMs <= 0 {
+		return fmt.Errorf("breaker.cooldown_ms must be > 0")
+	}
+	for label, ov := range cfg.Labels {
+		if ov.Severity != "" && ov.Severity != "BLOCK" && ov.Severity != "WARN" && ov.Severity != "LOG" {
+			return fmt.Errorf("labels[%q].severity must be BLOCK, WARN, or LOG", label)
+		}
+	}
+	return nil
 }
 
 func validateBehaviorConfig(cfg BehaviorConfig) error {
