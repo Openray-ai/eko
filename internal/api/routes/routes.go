@@ -12,6 +12,7 @@ func SetupRoutes(
 	router *gin.Engine,
 	sanitizeHandler *handlers.SanitizeHandler,
 	healthHandler *handlers.HealthHandler,
+	metricsHandler *handlers.MetricsHandler,
 	openaiProxy *openai.Proxy,
 ) {
 	// Apply global middleware
@@ -21,6 +22,9 @@ func SetupRoutes(
 
 	// Health check endpoint
 	router.GET("/health", healthHandler.Handle)
+
+	// Prometheus-compatible metrics endpoint
+	router.GET("/metrics", metricsHandler.Handle)
 
 	// Core API v1
 	v1 := router.Group("/v1")
@@ -33,11 +37,5 @@ func SetupRoutes(
 			v1.POST("/chat/completions", openaiProxy.HandleChatCompletion)
 			v1.POST("/responses", openaiProxy.HandleResponse)
 		}
-
-		// TODO: Add metrics endpoint
-		// TODO: Add patterns management endpoints
 	}
-
-	// TODO: /v1/anthropic/* routes
-	// TODO: /v1/google/* routes
 }
