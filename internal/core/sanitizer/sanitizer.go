@@ -73,17 +73,30 @@ func (s *Sanitizer) SanitizationMode() string {
 	return s.mode
 }
 
-// Sanitize detects and redacts sensitive data from input
+// Sanitize detects and redacts sensitive data from input. Equivalent to
+// SanitizeRedactWithContext(context.Background(), input); kept for callers
+// that don't have a context to pass.
 func (s *Sanitizer) Sanitize(input string) (*Result, error) {
+	return s.SanitizeRedactWithContext(context.Background(), input)
+}
+
+// SanitizeRedactWithContext runs redact-mode sanitization with a caller-supplied
+// context. The context is propagated into the detector (and from there into
+// the optional SLM HTTP call) so request cancellation can abort detection.
+// This is the redact-only entry point — it never tokenizes regardless of the
+// sanitizer's configured mode.
+func (s *Sanitizer) SanitizeRedactWithContext(ctx context.Context, input string) (*Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	startTime := time.Now()
 
-	// Detect violations
-	violations, err := s.detector.Detect(input)
+	violations, err := s.detector.DetectWithContext(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("detection failed: %w", err)
 	}
 
-	// If no violations found, return original input
 	if len(violations) == 0 {
 		return &Result{
 			OriginalPrompt:   input,
@@ -95,10 +108,7 @@ func (s *Sanitizer) Sanitize(input string) (*Result, error) {
 		}, nil
 	}
 
-	// Apply redaction strategies based on severity
 	sanitized := s.redactViolations(input, violations)
-
-	// Calculate processing time
 	processingTime := float64(time.Since(startTime).Microseconds()) / 1000.0
 
 	logger.Info("Sanitization completed", logger.Fields{
@@ -135,7 +145,7 @@ func (s *Sanitizer) SanitizeWithContext(ctx context.Context, input, sessionID st
 
 	startTime := time.Now()
 
-	violations, err := s.detector.Detect(input)
+	violations, err := s.detector.DetectWithContext(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("detection failed: %w", err)
 	}

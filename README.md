@@ -360,6 +360,69 @@ patterns:
     description: "Customer account numbers"
 ```
 
+### Optional SLM Detection (Contextual)
+
+Regex catches structured tokens (BVN, NUBAN, API keys). For **contextual** PII —
+person names, addresses, dates tied to a record — Ekō can call an optional Small
+Language Model sidecar that runs `openai/privacy-filter` with the
+`iamSamurai/privacy-filter-nigeria` LoRA adapter. When enabled, the SLM runs in
+parallel with regex detection and merges into the same redaction/tokenization
+pipeline.
+
+The sidecar is shipped in this repo at `slm-sidecar/` and wired up in
+`docker-compose.yml` behind a `slm` profile so the default `docker compose up`
+stays Go-only. To run with SLM:
+
+```bash
+docker compose --profile slm up --build
+```
+
+It is **off by default** in Ekō — enable in `configs/config.yaml`:
+
+```yaml
+proxy:
+  slm:
+    enabled: true
+    endpoint: "http://slm-sidecar:8000"
+    timeout_ms: 800
+    max_input_bytes: 16384       # skip SLM for inputs larger than this
+    breaker:
+      failure_threshold: 5       # consecutive failures before tripping
+      cooldown_ms: 30000         # how long to skip SLM after tripping
+    # Optional per-label overrides (see internal/core/slm/mapping.go):
+    # labels:
+    #   private_phone: { severity: "BLOCK" }
+```
+
+**Failure mode:** soft-fail with circuit breaker. If the sidecar is slow,
+unreachable, or returns errors, Ekō logs a warning, increments
+`eko_slm_failures_total`, and continues with regex-only detection. Requests
+never fail because SLM is down. After `failure_threshold` consecutive failures
+the breaker trips and SLM is skipped entirely until `cooldown_ms` has elapsed.
+
+**Per-request opt-in for `POST /v1/sanitize`:** the config flag controls
+whether the SLM client is wired up at startup. Independently, the sanitize
+endpoint accepts an `slm` boolean in the request body that toggles SLM use
+*for that single request*. Defaults to `false` when omitted — callers must
+opt in explicitly:
+
+```bash
+# Regex-only (default behaviour)
+curl -X POST localhost:8080/v1/sanitize \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Amina Yusuf called from +234 802 111 3344"}'
+
+# Opt this request in to SLM
+curl -X POST localhost:8080/v1/sanitize \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Amina Yusuf called from +234 802 111 3344","slm":true}'
+```
+
+Other endpoints (the OpenAI proxy paths) are unaffected — they always use SLM
+when the config flag enables it.
+
+See `slm-sidecar/README.md` for sidecar details.
+
 ---
 
 ## 🏗️ Deployment Options
@@ -625,8 +688,8 @@ Legal     → Ekō → Local LLM (stays on-prem)
 - Advanced compliance reporting
 - Multi-tenancy support
 
-**📋 Phase 3: Advanced**
-- Optional SLM module for contextual detection
+**🚧 Phase 3: Advanced (in progress)**
+- Optional SLM module for contextual detection (`slm-sidecar/`, opt-in via `proxy.slm.enabled`)
 - Smart routing (local vs API based on sensitivity)
 - Cost analytics per provider
 - GraphQL/gRPC proxy support

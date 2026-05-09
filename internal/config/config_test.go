@@ -102,6 +102,82 @@ func TestLoadBehaviorConfig_InvalidBackend(t *testing.T) {
 	}
 }
 
+func TestLoadSLMConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		check   func(*testing.T, *Config)
+	}{
+		{
+			name: "disabled by default applies no validation",
+			yaml: "proxy: {}\n",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.Proxy.SLM.Enabled {
+					t.Fatalf("expected slm.enabled=false by default")
+				}
+				if cfg.Proxy.SLM.Endpoint != "http://slm-sidecar:8000" {
+					t.Fatalf("expected default endpoint, got %q", cfg.Proxy.SLM.Endpoint)
+				}
+				if cfg.Proxy.SLM.TimeoutMs != 800 {
+					t.Fatalf("expected default timeout 800ms, got %d", cfg.Proxy.SLM.TimeoutMs)
+				}
+				if cfg.Proxy.SLM.Breaker.FailureThreshold != 5 {
+					t.Fatalf("expected default failure_threshold 5, got %d", cfg.Proxy.SLM.Breaker.FailureThreshold)
+				}
+			},
+		},
+		{
+			name: "enabled with overrides",
+			yaml: "proxy:\n  slm:\n    enabled: true\n    endpoint: \"http://x:9000\"\n    timeout_ms: 250\n    breaker:\n      failure_threshold: 3\n      cooldown_ms: 5000\n    labels:\n      private_phone:\n        severity: \"BLOCK\"\n",
+			check: func(t *testing.T, cfg *Config) {
+				if !cfg.Proxy.SLM.Enabled {
+					t.Fatalf("expected enabled=true")
+				}
+				if cfg.Proxy.SLM.Endpoint != "http://x:9000" {
+					t.Fatalf("endpoint mismatch: %q", cfg.Proxy.SLM.Endpoint)
+				}
+				if cfg.Proxy.SLM.TimeoutMs != 250 {
+					t.Fatalf("timeout mismatch: %d", cfg.Proxy.SLM.TimeoutMs)
+				}
+				ov, ok := cfg.Proxy.SLM.Labels["private_phone"]
+				if !ok || ov.Severity != "BLOCK" {
+					t.Fatalf("expected label override BLOCK, got %+v", ov)
+				}
+			},
+		},
+		{
+			name:    "enabled with invalid severity rejected",
+			yaml:    "proxy:\n  slm:\n    enabled: true\n    endpoint: \"http://x:9000\"\n    labels:\n      private_phone:\n        severity: \"NUCLEAR\"\n",
+			wantErr: true,
+		},
+		{
+			name:    "enabled with negative timeout rejected",
+			yaml:    "proxy:\n  slm:\n    enabled: true\n    endpoint: \"http://x:9000\"\n    timeout_ms: -1\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfig(t, tt.yaml)
+			cfg, err := Load(path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, cfg)
+			}
+		})
+	}
+}
+
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
 

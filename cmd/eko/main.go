@@ -6,6 +6,7 @@ import (
 	"eko/internal/config"
 	"eko/internal/core/detector"
 	"eko/internal/core/sanitizer"
+	"eko/internal/core/slm"
 	"eko/internal/core/tokenizer"
 	"eko/internal/helpers/logger"
 	"eko/internal/proxy/openai"
@@ -37,8 +38,14 @@ func main() {
 		"mode": cfg.Proxy.Behavior.SanitizationMode,
 	})
 
+	// Metrics collector is shared between the SLM client and the /metrics handler.
+	metrics := handlers.NewMetricsCollector()
+
 	// Initialize core components
 	det := detector.New()
+	if cfg.Proxy.SLM.Enabled {
+		attachSLM(det, &cfg.Proxy.SLM, metrics)
+	}
 	san, resolver, sessionStore := buildSanitizer(cfg, det)
 	defer func() {
 		if sessionStore != nil {
@@ -53,7 +60,7 @@ func main() {
 	openaiProxy := buildOpenAIProxy(cfg, san, resolver)
 
 	// Initialize HTTP handlers
-	router := buildRouter(san, openaiProxy, sessionStore)
+	router := buildRouter(metrics, san, openaiProxy, sessionStore)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
@@ -109,8 +116,7 @@ func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *to
 	return openaiProxy
 }
 
-func buildRouter(san *sanitizer.Sanitizer, openaiProxy *openai.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
-	metrics := handlers.NewMetricsCollector()
+func buildRouter(metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, openaiProxy *openai.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
 	sanitizeHandler := handlers.NewSanitizeHandler(san)
 	var healthChecker tokenizer.HealthChecker
 	if checker, ok := sessionStore.(tokenizer.HealthChecker); ok {
@@ -122,6 +128,33 @@ func buildRouter(san *sanitizer.Sanitizer, openaiProxy *openai.Proxy, sessionSto
 	router := gin.New()
 	routes.SetupRoutes(router, sanitizeHandler, healthHandler, metricsHandler, openaiProxy)
 	return router
+}
+
+func attachSLM(det *detector.Detector, cfg *config.SLMConfig, metrics *handlers.MetricsCollector) {
+	overrides := make(map[string]slm.LabelMapping, len(cfg.Labels))
+	for label, ov := range cfg.Labels {
+		overrides[label] = slm.LabelMapping{
+			Type:     ov.Type,
+			Severity: ov.Severity,
+			Pattern:  ov.Pattern,
+		}
+	}
+	client := slm.NewClient(slm.Config{
+		Endpoint:      cfg.Endpoint,
+		Timeout:       time.Duration(cfg.TimeoutMs) * time.Millisecond,
+		MaxInputBytes: cfg.MaxInputBytes,
+		Labels:        slm.MergeLabelOverrides(slm.DefaultLabels(), overrides),
+		Breaker: slm.BreakerConfig{
+			FailureThreshold: cfg.Breaker.FailureThreshold,
+			Cooldown:         time.Duration(cfg.Breaker.CooldownMs) * time.Millisecond,
+		},
+		Metrics: metrics,
+	})
+	det.SetSLM(client)
+	logger.Info("SLM contextual detector initialized", logger.Fields{
+		"endpoint":   cfg.Endpoint,
+		"timeout_ms": cfg.TimeoutMs,
+	})
 }
 
 func buildSessionStore(cfg *config.Config) (tokenizer.SessionStore, error) {
