@@ -3,6 +3,7 @@ package detector
 import (
 	"eko/internal/core/patterns"
 	"eko/internal/helpers/logger"
+	"runtime"
 	"sort"
 	"sync"
 )
@@ -46,15 +47,30 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 		return []Violation{}, nil
 	}
 
+	// Build a request-local semaphore sized to available parallelism, capped at
+	// the number of patterns. Using a local channel prevents cross-request
+	// head-of-line blocking: each Detect call competes only against its own
+	// goroutines, not those of concurrent callers.
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(patternList) {
+		workers = len(patternList)
+	}
+	sem := make(chan struct{}, workers)
+
 	// Channel to collect violations from goroutines
 	violationsChan := make(chan []Violation, len(patternList))
 	var wg sync.WaitGroup
 
-	// Process each pattern concurrently
+	// Process each pattern concurrently, bounded by the request-local semaphore.
 	for _, pattern := range patternList {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(p *patterns.CompiledPattern) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			violations := d.detectPattern(input, p)
 			violationsChan <- violations
 		}(pattern)
@@ -71,7 +87,7 @@ func (d *Detector) Detect(input string) ([]Violation, error) {
 	for violations := range violationsChan {
 		allViolations = append(allViolations, violations...)
 	}
-	allViolations = append(allViolations, d.detectAdvanced(input, patternMap)...)
+	allViolations = append(allViolations, d.detectAdvanced(input, patternMap, sem)...)
 
 	// Deduplicate overlapping violations
 	deduped := d.deduplicateViolations(allViolations)
@@ -146,19 +162,17 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		return lenI > lenJ
 	})
 
-	// Remove overlapping violations
+	// Remove overlapping violations using a sweep-line O(n) pass.
+	// Because violations are sorted left-to-right by Position, any new candidate
+	// whose Position >= maxEnd cannot overlap any already-kept violation.
 	deduped := make([]Violation, 0, len(violations))
+	maxEnd := 0
 	for _, v := range violations {
-		// Check if this violation overlaps with any already kept
-		overlaps := false
-		for _, kept := range deduped {
-			if d.overlaps(v, kept) {
-				overlaps = true
-				break
-			}
-		}
-		if !overlaps {
+		if v.Position >= maxEnd {
 			deduped = append(deduped, v)
+			if v.End > maxEnd {
+				maxEnd = v.End
+			}
 		}
 	}
 
