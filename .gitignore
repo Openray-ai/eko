@@ -60,3 +60,6 @@ github-actions-key.json
 
 # Internal analysis and planning artifacts (not part of application runtime)
 meta/
+
+# Draft release/marketing copy (published elsewhere, not via this repo)
+docs/release-article.md
