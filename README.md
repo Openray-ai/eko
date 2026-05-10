@@ -2,7 +2,7 @@
 
 > Blazing-fast prompt sanitization for AI - Prevent data leaks before they happen
 
-**Ekō** is an open-source security layer that protects your organization from accidentally leaking sensitive data to AI services. Built in Go for maximum performance, it acts as a transparent proxy between your applications and AI providers (OpenAI, with Anthropic and Google AI coming soon), automatically detecting and sanitizing credentials, PII, and business secrets in real-time.
+**Ekō** is an open-source, context-aware security proxy that prevents your organization from leaking sensitive data to AI services. Built in Go for maximum performance, it sits between your applications and AI providers (OpenAI today; Anthropic and Google on the roadmap) and combines deterministic pattern matching with an optional finetuned SLM for contextual detection — with first-class detectors for African fintech and banking compliance (BVN, NUBAN, NIN, M-Pesa, SA ID, and more).
 
 ---
 
