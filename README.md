@@ -612,7 +612,7 @@ Ekō is built for production scale:
 **vs Azure OpenAI / AWS Bedrock:**
 - ✅ **60-80% cheaper** - $3K-10K/year vs $8K-15K/year
 - ✅ **Actually sanitizes prompts** - Azure/AWS don't inspect content
-- ✅ **Vendor neutral** - Works with OpenAI, Anthropic, Google, local LLMs
+- ✅ **Vendor neutral** - OpenAI proxy today; Anthropic and Google on the roadmap. The core `/v1/sanitize` API works with any LLM you call yourself.
 - ✅ **African compliance** - Built-in NDPR, POPIA patterns
 - ✅ **Use both** - Deploy Ekō in front of Azure OpenAI for defense-in-depth
 
