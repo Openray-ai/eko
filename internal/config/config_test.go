@@ -190,3 +190,41 @@ func writeTempConfig(t *testing.T, content string) string {
 
 	return path
 }
+
+func TestApplyEnvOverrides(t *testing.T) {
+	t.Run("PORT overrides server.port", func(t *testing.T) {
+		t.Setenv("PORT", "9090")
+		cfg := Default()
+		applyEnvOverrides(cfg)
+		if cfg.Server.Port != "9090" {
+			t.Fatalf("port = %q, want 9090", cfg.Server.Port)
+		}
+	})
+
+	t.Run("EKO_SLM_ENDPOINT overrides slm.endpoint", func(t *testing.T) {
+		t.Setenv("EKO_SLM_ENDPOINT", "http://eko-slm.flycast")
+		cfg := Default()
+		cfg.Proxy.SLM.Endpoint = "http://slm-sidecar:8000"
+		applyEnvOverrides(cfg)
+		if cfg.Proxy.SLM.Endpoint != "http://eko-slm.flycast" {
+			t.Fatalf("slm endpoint = %q, want http://eko-slm.flycast", cfg.Proxy.SLM.Endpoint)
+		}
+	})
+
+	t.Run("empty env vars leave config untouched", func(t *testing.T) {
+		t.Setenv("PORT", "")
+		t.Setenv("EKO_SLM_ENDPOINT", "")
+
+		cfg := Default()
+		cfg.Server.Port = "8080"
+		cfg.Proxy.SLM.Endpoint = "http://slm-sidecar:8000"
+		applyEnvOverrides(cfg)
+
+		if cfg.Server.Port != "8080" {
+			t.Fatalf("port = %q, want 8080", cfg.Server.Port)
+		}
+		if cfg.Proxy.SLM.Endpoint != "http://slm-sidecar:8000" {
+			t.Fatalf("endpoint changed: %q", cfg.Proxy.SLM.Endpoint)
+		}
+	})
+}

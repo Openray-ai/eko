@@ -3,6 +3,8 @@ package middleware
 import (
 	"eko/internal/config"
 	"eko/internal/helpers/logger"
+	"os"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -19,6 +21,18 @@ func CORS() gin.HandlerFunc {
 		})
 	} else {
 		allowedOrigins = cfg.Cors.AllowedOrigins
+	}
+
+	// EKO_ALLOWED_ORIGINS overrides the YAML so PaaS deploys (Fly/Railway/Cloud
+	// Run) can set the frontend origin per environment without rebuilding.
+	if v := os.Getenv("EKO_ALLOWED_ORIGINS"); v != "" {
+		envOrigins := make([]string, 0)
+		for o := range strings.SplitSeq(v, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				envOrigins = append(envOrigins, trimmed)
+			}
+		}
+		allowedOrigins = envOrigins
 	}
 
 	defaultConfig := cors.DefaultConfig()

@@ -63,3 +63,9 @@ meta/
 
 # Draft release/marketing copy (published elsewhere, not via this repo)
 docs/release-article.md
+
+# Fly.io deployment artifacts (personal deploy config; not shipped open source)
+fly.toml
+slm-sidecar/fly.toml
+configs/config.fly.yaml
+docs/deploy/fly.md

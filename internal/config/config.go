@@ -380,10 +380,27 @@ func LoadConfig() *Config {
 		// Use fmt here since logger isn't initialized yet
 		fmt.Printf("Failed to load config from %s: %v\n", configPath, err)
 		fmt.Println("Using default configuration")
-		return Default()
+		cfg = Default()
 	}
 
+	applyEnvOverrides(cfg)
 	return cfg
+}
+
+// applyEnvOverrides lets PaaS environments (Fly, Railway, Cloud Run) inject
+// values that vary per deployment without templating the YAML. Only non-empty
+// env vars override; empty vars leave the YAML/default value in place.
+//
+// Note: CORS origins are overridden in middleware.CORS() because that path
+// loads its own config file (configs/cors.yml). See EKO_ALLOWED_ORIGINS in
+// internal/api/middleware/cors.go.
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("PORT"); v != "" {
+		cfg.Server.Port = v
+	}
+	if v := os.Getenv("EKO_SLM_ENDPOINT"); v != "" {
+		cfg.Proxy.SLM.Endpoint = v
+	}
 }
 
 func InitializeLogger(cfg *Config) {
