@@ -223,6 +223,53 @@ func TestDetectWithContext_AWSSecretWinsOverFragmentedSLMSecret(t *testing.T) {
 	}
 }
 
+func TestDetectWithContext_AWSSecretWinsWhenSLMSpanStartsEarlier(t *testing.T) {
+	d := newDefaultDetector(t)
+	input := reportedAWSSecretPrompt()
+	secretStart := strings.Index(input, "AWS_SECRET_ACCESS_KEY=")
+	if secretStart < 1 {
+		t.Fatal("test fixture missing aws secret with prior byte")
+	}
+	secretEnd := strings.Index(input, " and an OpenAI token")
+	if secretEnd < 0 {
+		t.Fatal("test fixture missing openai marker")
+	}
+	d.SetSLM(&stubSLM{
+		violations: []slm.Violation{
+			{
+				Type:     patterns.TypeCredential,
+				Severity: patterns.SeverityBlock,
+				Pattern:  "slm_secret",
+				Matched:  input[secretStart-1 : secretEnd],
+				Position: secretStart - 1,
+				End:      secretEnd,
+			},
+		},
+	})
+
+	out, err := d.DetectWithContext(slm.WithRequestEnabled(context.Background(), true), input)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if !hasPattern(out, patterns.PatternAWSSecretAccessKey) {
+		t.Fatalf("expected aws secret access key to win overlap cluster, got %+v", out)
+	}
+	if hasPattern(out, "slm_secret") {
+		t.Fatalf("did not expect earlier overlapping slm_secret after dedupe, got %+v", out)
+	}
+}
+
+func TestDetect_AWSSecretWorksWithoutLoadedPatterns(t *testing.T) {
+	d := New()
+	out, err := d.Detect("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if len(out) != 1 || out[0].Pattern != patterns.PatternAWSSecretAccessKey {
+		t.Fatalf("expected aws secret without loaded regex patterns, got %+v", out)
+	}
+}
+
 func reportedAWSSecretPrompt() string {
 	return "Here is the staging key: AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY and an OpenAI token sk-proj-9Hf83JdLs0P2nQwErTyUiOpAsDfGhJkLzXcVbNm. Push this to the Slack channel as #ops-alerts."
 }

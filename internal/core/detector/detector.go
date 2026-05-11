@@ -82,9 +82,15 @@ func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Viola
 		}
 	}
 
+	allViolations := convertSecretFindings(secrets.Detect(input))
+
 	if len(patternList) == 0 {
 		logger.Warn("No patterns loaded for detection", logger.Fields{})
-		return []Violation{}, nil
+		deduped := d.deduplicateViolations(allViolations)
+		sort.Slice(deduped, func(i, j int) bool {
+			return deduped[i].Position < deduped[j].Position
+		})
+		return deduped, nil
 	}
 
 	// Build a request-local semaphore sized to available parallelism, capped at
@@ -146,11 +152,9 @@ func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Viola
 	}()
 
 	// Collect all violations
-	var allViolations []Violation
 	for violations := range violationsChan {
 		allViolations = append(allViolations, violations...)
 	}
-	allViolations = append(allViolations, convertSecretFindings(secrets.Detect(input))...)
 	allViolations = append(allViolations, d.detectAdvanced(input, patternMap, sem)...)
 
 	// Deduplicate overlapping violations
@@ -245,46 +249,69 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		return violations
 	}
 
-	// Sort by position, then by severity priority
+	// Sort by position to group overlap clusters deterministically.
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Position != violations[j].Position {
 			return violations[i].Position < violations[j].Position
 		}
-		priorityI := d.getSeverityPriority(violations[i].Severity)
-		priorityJ := d.getSeverityPriority(violations[j].Severity)
-		if priorityI != priorityJ {
-			return priorityI > priorityJ
-		}
-		typePriorityI := d.getTypePriority(violations[i].Type)
-		typePriorityJ := d.getTypePriority(violations[j].Type)
-		if typePriorityI != typePriorityJ {
-			return typePriorityI > typePriorityJ
-		}
-		secretPriorityI := d.getSecretPatternPriority(violations[i].Pattern)
-		secretPriorityJ := d.getSecretPatternPriority(violations[j].Pattern)
-		if secretPriorityI != secretPriorityJ {
-			return secretPriorityI > secretPriorityJ
-		}
-		lenI := violations[i].End - violations[i].Position
-		lenJ := violations[j].End - violations[j].Position
-		return lenI > lenJ
+		return d.betterViolation(violations[i], violations[j])
 	})
 
-	// Remove overlapping violations using a sweep-line O(n) pass.
-	// Because violations are sorted left-to-right by Position, any new candidate
-	// whose Position >= maxEnd cannot overlap any already-kept violation.
+	// Remove overlapping violations by clustering intersecting spans and keeping
+	// the best candidate from each cluster. This lets provider-specific secret
+	// findings beat earlier overlapping generic/SLM spans.
 	deduped := make([]Violation, 0, len(violations))
-	maxEnd := 0
-	for _, v := range violations {
-		if v.Position >= maxEnd {
-			deduped = append(deduped, v)
-			if v.End > maxEnd {
-				maxEnd = v.End
+	best := violations[0]
+	clusterEnd := violations[0].End
+	for _, v := range violations[1:] {
+		if v.Position < clusterEnd {
+			if d.betterViolation(v, best) {
+				best = v
 			}
+			if v.End > clusterEnd {
+				clusterEnd = v.End
+			}
+			continue
 		}
+
+		deduped = append(deduped, best)
+		best = v
+		clusterEnd = v.End
 	}
+	deduped = append(deduped, best)
+
+	sort.Slice(deduped, func(i, j int) bool {
+		if deduped[i].Position != deduped[j].Position {
+			return deduped[i].Position < deduped[j].Position
+		}
+		return d.betterViolation(deduped[i], deduped[j])
+	})
 
 	return deduped
+}
+
+func (d *Detector) betterViolation(a, b Violation) bool {
+	priorityA := d.getSeverityPriority(a.Severity)
+	priorityB := d.getSeverityPriority(b.Severity)
+	if priorityA != priorityB {
+		return priorityA > priorityB
+	}
+	typePriorityA := d.getTypePriority(a.Type)
+	typePriorityB := d.getTypePriority(b.Type)
+	if typePriorityA != typePriorityB {
+		return typePriorityA > typePriorityB
+	}
+	secretPriorityA := d.getSecretPatternPriority(a.Pattern)
+	secretPriorityB := d.getSecretPatternPriority(b.Pattern)
+	if secretPriorityA != secretPriorityB {
+		return secretPriorityA > secretPriorityB
+	}
+	lenA := a.End - a.Position
+	lenB := b.End - b.Position
+	if lenA != lenB {
+		return lenA > lenB
+	}
+	return a.Position < b.Position
 }
 
 // overlaps checks if two violations overlap in position
