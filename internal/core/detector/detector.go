@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"eko/internal/core/patterns"
+	"eko/internal/core/secrets"
 	"eko/internal/core/slm"
 	"eko/internal/helpers/logger"
 )
@@ -149,6 +150,7 @@ func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Viola
 	for violations := range violationsChan {
 		allViolations = append(allViolations, violations...)
 	}
+	allViolations = append(allViolations, convertSecretFindings(secrets.Detect(input))...)
 	allViolations = append(allViolations, d.detectAdvanced(input, patternMap, sem)...)
 
 	// Deduplicate overlapping violations
@@ -184,6 +186,24 @@ func convertSLMViolations(in []slm.Violation) []Violation {
 			Matched:  v.Matched,
 			Position: v.Position,
 			End:      v.End,
+		})
+	}
+	return out
+}
+
+func convertSecretFindings(in []secrets.Finding) []Violation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Violation, 0, len(in))
+	for _, f := range in {
+		out = append(out, Violation{
+			Type:     f.Type,
+			Severity: f.Severity,
+			Pattern:  f.Pattern,
+			Matched:  f.Matched,
+			Position: f.Position,
+			End:      f.End,
 		})
 	}
 	return out
@@ -240,6 +260,11 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		if typePriorityI != typePriorityJ {
 			return typePriorityI > typePriorityJ
 		}
+		secretPriorityI := d.getSecretPatternPriority(violations[i].Pattern)
+		secretPriorityJ := d.getSecretPatternPriority(violations[j].Pattern)
+		if secretPriorityI != secretPriorityJ {
+			return secretPriorityI > secretPriorityJ
+		}
 		lenI := violations[i].End - violations[i].Position
 		lenJ := violations[j].End - violations[j].Position
 		return lenI > lenJ
@@ -289,6 +314,29 @@ func (d *Detector) getTypePriority(patternType string) int {
 	case patterns.TypeFinancial:
 		return 2
 	case patterns.TypePII:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (d *Detector) getSecretPatternPriority(patternName string) int {
+	switch patternName {
+	case patterns.PatternAWSAccessKeyID,
+		patterns.PatternAWSSecretAccessKey,
+		patterns.PatternAWSSessionToken:
+		return 4
+	case patterns.PatternOpenAIAPIKey,
+		patterns.PatternAnthropicAPIKey,
+		patterns.PatternGoogleAPIKey,
+		patterns.PatternAWSAccessKey:
+		return 3
+	case patterns.PatternGenericSecretAssignment,
+		patterns.PatternGenericAPIKeyAssignment,
+		patterns.PatternGenericTokenAssignment,
+		patterns.PatternGenericPrivateKeyAssignment:
+		return 2
+	case "slm_secret":
 		return 1
 	default:
 		return 0
