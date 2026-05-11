@@ -249,36 +249,28 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		return violations
 	}
 
-	// Sort by position to group overlap clusters deterministically.
+	// Sort by quality first, then keep every candidate that does not overlap an
+	// already-kept better candidate. This avoids bridge spans suppressing later
+	// non-overlapping findings while still letting provider-specific secrets beat
+	// earlier overlapping generic/SLM spans.
 	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].Position != violations[j].Position {
-			return violations[i].Position < violations[j].Position
-		}
 		return d.betterViolation(violations[i], violations[j])
 	})
 
-	// Remove overlapping violations by clustering intersecting spans and keeping
-	// the best candidate from each cluster. This lets provider-specific secret
-	// findings beat earlier overlapping generic/SLM spans.
 	deduped := make([]Violation, 0, len(violations))
-	best := violations[0]
-	clusterEnd := violations[0].End
-	for _, v := range violations[1:] {
-		if v.Position < clusterEnd {
-			if d.betterViolation(v, best) {
-				best = v
+	for _, candidate := range violations {
+		overlapsKept := false
+		for _, kept := range deduped {
+			if d.overlaps(candidate, kept) {
+				overlapsKept = true
+				break
 			}
-			if v.End > clusterEnd {
-				clusterEnd = v.End
-			}
+		}
+		if overlapsKept {
 			continue
 		}
-
-		deduped = append(deduped, best)
-		best = v
-		clusterEnd = v.End
+		deduped = append(deduped, candidate)
 	}
-	deduped = append(deduped, best)
 
 	sort.Slice(deduped, func(i, j int) bool {
 		if deduped[i].Position != deduped[j].Position {

@@ -241,6 +241,27 @@ func TestDetector_Detect_Deduplication(t *testing.T) {
 	}
 }
 
+func TestDetector_Deduplicate_DoesNotLetBridgeSpanSuppressNonOverlaps(t *testing.T) {
+	d := New()
+	violations := []Violation{
+		{Type: patterns.TypePII, Severity: patterns.SeverityBlock, Pattern: "a", Matched: "aaaaaaaaaa", Position: 0, End: 10},
+		{Type: patterns.TypePII, Severity: patterns.SeverityWarn, Pattern: "bridge", Matched: "bbbbbbbbbbb", Position: 9, End: 20},
+		{Type: patterns.TypePII, Severity: patterns.SeverityBlock, Pattern: "c", Matched: "ccccccccccc", Position: 19, End: 30},
+	}
+
+	deduped := d.deduplicateViolations(violations)
+	if len(deduped) != 2 {
+		t.Fatalf("expected A and C to survive bridge dedupe, got %+v", deduped)
+	}
+	found := map[string]bool{}
+	for _, v := range deduped {
+		found[v.Pattern] = true
+	}
+	if !found["a"] || !found["c"] || found["bridge"] {
+		t.Fatalf("expected only non-overlapping higher-priority endpoints, got %+v", deduped)
+	}
+}
+
 func TestDetector_Detect_EmptyInput(t *testing.T) {
 	d := New()
 
