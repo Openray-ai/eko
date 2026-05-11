@@ -257,18 +257,13 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		return d.betterViolation(violations[i], violations[j])
 	})
 
+	keptSpans := violationSpanIndex{}
 	deduped := make([]Violation, 0, len(violations))
 	for _, candidate := range violations {
-		overlapsKept := false
-		for _, kept := range deduped {
-			if d.overlaps(candidate, kept) {
-				overlapsKept = true
-				break
-			}
-		}
-		if overlapsKept {
+		if keptSpans.overlaps(candidate) {
 			continue
 		}
+		keptSpans.insert(candidate)
 		deduped = append(deduped, candidate)
 	}
 
@@ -280,6 +275,131 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 	})
 
 	return deduped
+}
+
+// violationSpanIndex tracks accepted, non-overlapping spans in position order.
+// Dedupe processes candidates in quality order, so the index only answers:
+// "does this candidate overlap anything already accepted?" The AVL tree keeps
+// those lookups and inserts logarithmic even when a prompt has thousands of
+// non-overlapping regex hits.
+type violationSpanIndex struct {
+	root *violationSpanNode
+}
+
+type violationSpanNode struct {
+	violation Violation
+	left      *violationSpanNode
+	right     *violationSpanNode
+	height    int
+}
+
+func (idx *violationSpanIndex) overlaps(v Violation) bool {
+	for node := idx.root; node != nil; {
+		switch {
+		case v.End <= node.violation.Position:
+			node = node.left
+		case v.Position >= node.violation.End:
+			node = node.right
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func (idx *violationSpanIndex) insert(v Violation) {
+	idx.root = insertViolationSpan(idx.root, v)
+}
+
+func insertViolationSpan(node *violationSpanNode, v Violation) *violationSpanNode {
+	if node == nil {
+		return &violationSpanNode{violation: v, height: 1}
+	}
+
+	if compareViolationSpan(v, node.violation) < 0 {
+		node.left = insertViolationSpan(node.left, v)
+	} else if compareViolationSpan(v, node.violation) > 0 {
+		node.right = insertViolationSpan(node.right, v)
+	} else {
+		return node
+	}
+
+	updateViolationSpanHeight(node)
+	return rebalanceViolationSpan(node)
+}
+
+func compareViolationSpan(a, b Violation) int {
+	if a.Position != b.Position {
+		return a.Position - b.Position
+	}
+	if a.End != b.End {
+		return a.End - b.End
+	}
+	if a.Pattern < b.Pattern {
+		return -1
+	}
+	if a.Pattern > b.Pattern {
+		return 1
+	}
+	if a.Matched < b.Matched {
+		return -1
+	}
+	if a.Matched > b.Matched {
+		return 1
+	}
+	return 0
+}
+
+func rebalanceViolationSpan(node *violationSpanNode) *violationSpanNode {
+	balance := violationSpanHeight(node.left) - violationSpanHeight(node.right)
+	if balance > 1 {
+		if violationSpanHeight(node.left.left) < violationSpanHeight(node.left.right) {
+			node.left = rotateViolationSpanLeft(node.left)
+		}
+		return rotateViolationSpanRight(node)
+	}
+	if balance < -1 {
+		if violationSpanHeight(node.right.right) < violationSpanHeight(node.right.left) {
+			node.right = rotateViolationSpanRight(node.right)
+		}
+		return rotateViolationSpanLeft(node)
+	}
+	return node
+}
+
+func rotateViolationSpanLeft(node *violationSpanNode) *violationSpanNode {
+	pivot := node.right
+	node.right = pivot.left
+	pivot.left = node
+	updateViolationSpanHeight(node)
+	updateViolationSpanHeight(pivot)
+	return pivot
+}
+
+func rotateViolationSpanRight(node *violationSpanNode) *violationSpanNode {
+	pivot := node.left
+	node.left = pivot.right
+	pivot.right = node
+	updateViolationSpanHeight(node)
+	updateViolationSpanHeight(pivot)
+	return pivot
+}
+
+func updateViolationSpanHeight(node *violationSpanNode) {
+	leftHeight := violationSpanHeight(node.left)
+	rightHeight := violationSpanHeight(node.right)
+	if leftHeight > rightHeight {
+		node.height = leftHeight + 1
+		return
+	}
+	node.height = rightHeight + 1
+}
+
+func violationSpanHeight(node *violationSpanNode) int {
+	if node == nil {
+		return 0
+	}
+	return node.height
 }
 
 func (d *Detector) betterViolation(a, b Violation) bool {

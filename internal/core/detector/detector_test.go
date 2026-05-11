@@ -2,6 +2,7 @@ package detector
 
 import (
 	"eko/internal/core/patterns"
+	"math/bits"
 	"regexp"
 	"testing"
 )
@@ -259,6 +260,49 @@ func TestDetector_Deduplicate_DoesNotLetBridgeSpanSuppressNonOverlaps(t *testing
 	}
 	if !found["a"] || !found["c"] || found["bridge"] {
 		t.Fatalf("expected only non-overlapping higher-priority endpoints, got %+v", deduped)
+	}
+}
+
+func TestDetector_Deduplicate_KeepsLargeNonOverlappingSet(t *testing.T) {
+	d := New()
+	const count = 5000
+	violations := make([]Violation, 0, count)
+	for i := 0; i < count; i++ {
+		severity := patterns.SeverityWarn
+		if i%2 == 0 {
+			severity = patterns.SeverityBlock
+		}
+		violations = append(violations, Violation{
+			Type:     patterns.TypePII,
+			Severity: severity,
+			Pattern:  "non_overlapping",
+			Matched:  "value",
+			Position: i * 10,
+			End:      i*10 + 5,
+		})
+	}
+
+	deduped := d.deduplicateViolations(violations)
+	if len(deduped) != count {
+		t.Fatalf("expected all non-overlapping violations to survive, got %d", len(deduped))
+	}
+	for i := 1; i < len(deduped); i++ {
+		if deduped[i-1].Position >= deduped[i].Position {
+			t.Fatalf("expected deduped violations sorted by position at index %d: %+v then %+v", i, deduped[i-1], deduped[i])
+		}
+	}
+}
+
+func TestViolationSpanIndex_BalancesAscendingInserts(t *testing.T) {
+	const count = 1024
+	index := violationSpanIndex{}
+	for i := 0; i < count; i++ {
+		index.insert(Violation{Position: i * 10, End: i*10 + 5})
+	}
+
+	maxReasonableAVLHeight := bits.Len(uint(count)) * 2
+	if index.root.height > maxReasonableAVLHeight {
+		t.Fatalf("expected balanced span index height <= %d, got %d", maxReasonableAVLHeight, index.root.height)
 	}
 }
 
