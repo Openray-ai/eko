@@ -1,0 +1,561 @@
+{
+  "info": {
+    "_postman_id": "b604c60e-33c5-45a4-ae6a-eko-full-regression",
+    "name": "Ekō Full Regression - API, Proxy, SLM",
+    "description": "Assertion-heavy regression collection for local Ekō testing. Start the stack with `docker compose --profile slm up --build -d`, then run this collection against `{{baseUrl}}`. The OpenAI proxy cases use a fake API key and assert Ekō behavior plus tolerant upstream status handling.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "openAiApiKey",
+      "value": "sk-test-fake-key-for-integration-testing"
+    },
+    {
+      "key": "stableSessionId",
+      "value": "eko_11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "key": "firstEmailToken",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Service Health",
+      "item": [
+        {
+          "name": "GET /health returns healthy",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('service is eko', () => pm.expect(json.service).to.eql('eko'));",
+                  "pm.test('status is healthy', () => pm.expect(json.status).to.eql('healthy'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /ready returns ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ready"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('service is eko', () => pm.expect(json.service).to.eql('eko'));",
+                  "pm.test('status is ready', () => pm.expect(json.status).to.eql('ready'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /metrics exposes core and SLM metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/metrics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.text();",
+                  "pm.test('has uptime metric', () => pm.expect(body).to.include('eko_uptime_seconds'));",
+                  "pm.test('has SLM requests metric', () => pm.expect(body).to.include('eko_slm_requests_total'));",
+                  "pm.test('has SLM breaker metric', () => pm.expect(body).to.include('eko_slm_breaker_open'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - Sanitize Core API",
+      "item": [
+        {
+          "name": "POST /v1/sanitize rejects missing prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error is invalid request', () => pm.expect(pm.response.json().error).to.eql('invalid request'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/sanitize rejects invalid session_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"hello\",\"session_id\":\"bad-session\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error is invalid session_id', () => pm.expect(pm.response.json().error).to.eql('invalid session_id'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clean prompt returns safe true",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"Explain the difference between channels and goroutines in Go.\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('safe is true', () => pm.expect(json.safe).to.eql(true));",
+                  "pm.test('no violations', () => pm.expect(json.violations || []).to.have.length(0));",
+                  "pm.test('prompt unchanged', () => pm.expect(json.sanitized_prompt).to.eql(json.original_prompt));",
+                  "pm.test('session id generated', () => pm.expect(json.session_id).to.match(/^eko_[0-9a-f-]{36}$/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Structured PII and financial data are tokenized",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"My BVN is 12345678901 and email is john@company.com. Card 4111 1111 1111 1111\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "const patterns = json.violations.map(v => v.pattern);",
+                  "pm.test('safe is false', () => pm.expect(json.safe).to.eql(false));",
+                  "pm.test('detects BVN', () => pm.expect(patterns).to.include('nigerian_bvn'));",
+                  "pm.test('detects email', () => pm.expect(patterns).to.include('email'));",
+                  "pm.test('detects credit card', () => pm.expect(patterns).to.include('credit_card'));",
+                  "pm.test('removes original BVN', () => pm.expect(json.sanitized_prompt).to.not.include('12345678901'));",
+                  "pm.test('removes original email', () => pm.expect(json.sanitized_prompt).to.not.include('john@company.com'));",
+                  "pm.test('removes original card', () => pm.expect(json.sanitized_prompt).to.not.include('4111 1111 1111 1111'));",
+                  "pm.test('has 3 violations', () => pm.expect(json.violations).to.have.length(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Credentials are detected and not leaked",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"Debug postgres://admin:SecureP@ss123@prod-db.company.com and mongodb://root:secret@localhost:27017/app\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "const patterns = json.violations.map(v => v.pattern);",
+                  "pm.test('detects postgres connection', () => pm.expect(patterns).to.include('postgres_connection'));",
+                  "pm.test('detects mongodb connection', () => pm.expect(patterns).to.include('mongodb_connection'));",
+                  "pm.test('postgres secret removed', () => pm.expect(json.sanitized_prompt).to.not.include('SecureP@ss123'));",
+                  "pm.test('mongodb secret removed', () => pm.expect(json.sanitized_prompt).to.not.include('root:secret'));",
+                  "pm.test('all violations are credentials', () => pm.expect(json.violations.every(v => v.type === 'credential')).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tokenization is stable within a supplied session - first call",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"Email john@company.com for onboarding.\",\"session_id\":\"{{stableSessionId}}\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('uses supplied session id', () => pm.expect(json.session_id).to.eql(pm.collectionVariables.get('stableSessionId')));",
+                  "pm.test('detects email', () => pm.expect(json.violations.map(v => v.pattern)).to.include('email'));",
+                  "pm.collectionVariables.set('firstEmailToken', json.sanitized_prompt);",
+                  "pm.test('saved sanitized prompt token', () => pm.expect(pm.collectionVariables.get('firstEmailToken')).to.not.include('john@company.com'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tokenization is stable within a supplied session - second call",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"Email john@company.com for onboarding.\",\"session_id\":\"{{stableSessionId}}\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('same session id', () => pm.expect(json.session_id).to.eql(pm.collectionVariables.get('stableSessionId')));",
+                  "pm.test('same sanitized prompt as first call', () => pm.expect(json.sanitized_prompt).to.eql(pm.collectionVariables.get('firstEmailToken')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "SLM omitted defaults to regex-only",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"Amina Yusuf lives at 12 Broad Street Lagos and can be reached at +234 802 111 3344\"}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "const patterns = json.violations.map(v => v.pattern);",
+                  "pm.test('does not include SLM-only person by default', () => pm.expect(patterns).to.not.include('slm_person'));",
+                  "pm.test('does not include SLM-only address by default', () => pm.expect(patterns).to.not.include('slm_address'));",
+                  "pm.test('may detect phone through regex', () => pm.expect(patterns.some(p => p.includes('phone'))).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "SLM opt-in detects contextual person, address, phone",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"Amina Yusuf lives at 12 Broad Street Lagos and can be reached at +234 802 111 3344\",\"slm\":true}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "const patterns = json.violations.map(v => v.pattern);",
+                  "pm.test('detects SLM person', () => pm.expect(patterns).to.include('slm_person'));",
+                  "pm.test('detects SLM address', () => pm.expect(patterns).to.include('slm_address'));",
+                  "pm.test('detects SLM phone or regex phone', () => pm.expect(patterns.some(p => p === 'slm_phone' || p.includes('phone'))).to.eql(true));",
+                  "pm.test('removes original person', () => pm.expect(json.sanitized_prompt).to.not.include('Amina Yusuf'));",
+                  "pm.test('removes original address', () => pm.expect(json.sanitized_prompt).to.not.include('12 Broad Street Lagos'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - OpenAI Proxy Surface",
+      "item": [
+        {
+          "name": "Chat completions proxy adds violation headers for sensitive prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openAiApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"My email is user@example.com and db is postgres://admin:secret@localhost:5432/app\"}]}"
+            },
+            "url": "{{baseUrl}}/v1/chat/completions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('proxy returns an upstream-style status', () => pm.expect([200, 400, 401, 403, 429, 500, 502, 503, 504]).to.include(pm.response.code));",
+                  "pm.test('violation count header exists', () => pm.expect(pm.response.headers.get('X-Eko-Violations-Found')).to.not.be.null);",
+                  "pm.test('found at least two violations', () => pm.expect(Number(pm.response.headers.get('X-Eko-Violations-Found'))).to.be.at.least(2));",
+                  "pm.test('summary includes pii and credential', () => { const summary = pm.response.headers.get('X-Eko-Violation-Summary') || ''; pm.expect(summary).to.include('pii'); pm.expect(summary).to.include('credential'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chat completions streaming emits first SSE violation event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openAiApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"gpt-4o\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Contact user@example.com before using postgres://admin:secret@localhost:5432/app\"}]}"
+            },
+            "url": "{{baseUrl}}/v1/chat/completions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('proxy returns a streaming/upstream status', () => pm.expect([200, 400, 401, 403, 429, 500, 502, 503, 504]).to.include(pm.response.code));",
+                  "const body = pm.response.text();",
+                  "pm.test('stream contains eko violation event when status is 200', () => { if (pm.response.code === 200) pm.expect(body).to.include('eko.violation_report'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Responses proxy adds violation headers for string input",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openAiApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"gpt-4.1\",\"input\":\"My email is admin@company.com and database is postgres://dbuser:secretpass@db.example.com:5432/production\"}"
+            },
+            "url": "{{baseUrl}}/v1/responses"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('proxy returns an upstream-style status', () => pm.expect([200, 400, 401, 403, 429, 500, 502, 503, 504]).to.include(pm.response.code));",
+                  "pm.test('violation count header exists or upstream accepted without assertion', () => { const h = pm.response.headers.get('X-Eko-Violations-Found'); if (h !== null) pm.expect(Number(h)).to.be.at.least(1); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Responses proxy handles array input",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openAiApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"gpt-4.1\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"My email is array@example.com.\"},{\"type\":\"input_text\",\"text\":\"Connection is postgres://admin:secret@localhost:5432/app.\"}]}]}"
+            },
+            "url": "{{baseUrl}}/v1/responses"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('proxy returns an upstream-style status', () => pm.expect([200, 400, 401, 403, 429, 500, 502, 503, 504]).to.include(pm.response.code));",
+                  "pm.test('array input violations are reported when headers are present', () => { const h = pm.response.headers.get('X-Eko-Violations-Found'); if (h !== null) pm.expect(Number(h)).to.be.at.least(2); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ]
+}

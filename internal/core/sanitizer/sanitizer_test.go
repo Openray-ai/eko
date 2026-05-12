@@ -437,6 +437,10 @@ func TestSanitizer_GetRedactionLabel(t *testing.T) {
 		{patterns.PatternOpenAIAPIKey, patterns.TypeCredential, "[REDACTED_API_KEY]"},
 		{patterns.PatternNigerianBVN, patterns.TypePII, "[REDACTED_BVN]"},
 		{patterns.PatternCreditCard, patterns.TypeFinancial, "[REDACTED_CARD]"},
+		{patterns.PatternAWSAccessKeyID, patterns.TypeCredential, "[REDACTED_AWS_ACCESS_KEY_ID]"},
+		{patterns.PatternAWSSecretAccessKey, patterns.TypeCredential, "[REDACTED_AWS_SECRET_ACCESS_KEY]"},
+		{patterns.PatternAWSSessionToken, patterns.TypeCredential, "[REDACTED_AWS_SESSION_TOKEN]"},
+		{patterns.PatternGenericSecretAssignment, patterns.TypeCredential, "[REDACTED_CREDENTIAL]"},
 		{patterns.PatternDateOfBirth, patterns.TypePII, "[REDACTED_DOB]"},
 		{patterns.PatternPostalCode, patterns.TypePII, "[REDACTED_POSTAL_CODE]"},
 		{"unknown_pattern", patterns.TypePII, "[REDACTED_PII]"},
@@ -452,6 +456,38 @@ func TestSanitizer_GetRedactionLabel(t *testing.T) {
 				t.Errorf("expected '%s', got '%s'", tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestSanitizer_SanitizeWithSession_AWSSecretRedactedNotTokenized(t *testing.T) {
+	det := detector.New()
+	det.LoadPattern(&patterns.CompiledPattern{
+		Name:        patterns.PatternEmail,
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        patterns.TypePII,
+		Severity:    patterns.SeverityBlock,
+		Description: "Email address",
+	})
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "tokenize")
+
+	secret := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	input := "AWS_SECRET_ACCESS_KEY=" + secret + " and email john@example.com"
+	result, err := s.SanitizeWithSession(input, "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_AWS_SECRET_ACCESS_KEY]") {
+		t.Fatalf("expected aws secret redaction label, got %q", result.SanitizedPrompt)
+	}
+	if strings.Contains(result.SanitizedPrompt, secret) {
+		t.Fatalf("aws secret leaked in sanitized prompt: %q", result.SanitizedPrompt)
+	}
+	if result.TokenizedCount != 1 {
+		t.Fatalf("expected only email tokenized, got %d", result.TokenizedCount)
 	}
 }
 
