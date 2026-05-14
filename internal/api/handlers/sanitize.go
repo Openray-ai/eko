@@ -31,6 +31,11 @@ type SanitizeRequest struct {
 	// preserved: if the sidecar is unreachable or the breaker is open, the
 	// request still succeeds with regex-only results.
 	SLM bool `json:"slm"`
+	// SanitizationMode is a per-request override of the configured
+	// `proxy.behavior.sanitization_mode`. Allowed values: "redact",
+	// "tokenize", or empty (use the configured default). Mirrors the
+	// pattern used by the SLM field above.
+	SanitizationMode string `json:"sanitization_mode"`
 }
 
 func (h *SanitizeHandler) Handle(c *gin.Context) {
@@ -48,7 +53,15 @@ func (h *SanitizeHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	switch req.SanitizationMode {
+	case "", "redact", "tokenize":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid sanitization_mode"})
+		return
+	}
+
 	ctx := slm.WithRequestEnabled(c.Request.Context(), req.SLM)
+	ctx = sanitizer.WithRequestMode(ctx, req.SanitizationMode)
 	result, err := h.sanitizer.SanitizeWithContext(ctx, req.Prompt, sessionID)
 	if err != nil {
 		status := http.StatusInternalServerError

@@ -87,20 +87,20 @@ func main() {
 }
 
 func buildSanitizer(cfg *config.Config, det *detector.Detector) (*sanitizer.Sanitizer, *tokenizer.Resolver, tokenizer.SessionStore) {
+	// The tokenizer plumbing is wired up unconditionally so the per-request
+	// `sanitization_mode` override on POST /v1/sanitize works regardless of
+	// the configured default. The configured value becomes the default mode
+	// applied when a request doesn't set its own.
 	mode := cfg.Proxy.Behavior.SanitizationMode
-	if mode == "tokenize" {
-		store, err := buildSessionStore(cfg)
-		if err != nil {
-			logger.Fatal("Failed to initialize session store", logger.Fields{
-				"error": err.Error(),
-			})
-		}
-		tok := tokenizer.NewTokenizer()
-		resolver := tokenizer.NewResolver(store)
-		return sanitizer.NewWithTokenizer(det, tok, store, mode), resolver, store
+	store, err := buildSessionStore(cfg)
+	if err != nil {
+		logger.Fatal("Failed to initialize session store", logger.Fields{
+			"error": err.Error(),
+		})
 	}
-
-	return sanitizer.New(det), nil, nil
+	tok := tokenizer.NewTokenizer()
+	resolver := tokenizer.NewResolver(store)
+	return sanitizer.NewWithTokenizer(det, tok, store, mode), resolver, store
 }
 
 func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *tokenizer.Resolver) *openai.Proxy {

@@ -1,6 +1,7 @@
 package sanitizer
 
 import (
+	"context"
 	"eko/internal/core/detector"
 	"eko/internal/core/patterns"
 	"eko/internal/core/tokenizer"
@@ -596,6 +597,63 @@ func TestSanitizer_SanitizeWithSession_RedactMode(t *testing.T) {
 
 	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_EMAIL]") {
 		t.Errorf("expected redaction marker, got: %s", result.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_SanitizeWithContext_RequestModeOverridesToRedact(t *testing.T) {
+	det := detector.New()
+	det.LoadPattern(&patterns.CompiledPattern{
+		Name:        patterns.PatternEmail,
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Email address",
+	})
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "tokenize")
+
+	ctx := WithRequestMode(context.Background(), "redact")
+	result, err := s.SanitizeWithContext(ctx, "Contact john@example.com", "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TokenizedCount != 0 {
+		t.Errorf("expected tokenized_count=0 after redact override, got %d", result.TokenizedCount)
+	}
+	if !strings.Contains(result.SanitizedPrompt, "[REDACTED_EMAIL]") {
+		t.Errorf("expected redaction marker, got: %s", result.SanitizedPrompt)
+	}
+}
+
+func TestSanitizer_SanitizeWithContext_RequestModeOverridesToTokenize(t *testing.T) {
+	det := detector.New()
+	det.LoadPattern(&patterns.CompiledPattern{
+		Name:        patterns.PatternEmail,
+		Regex:       regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`),
+		Type:        patterns.TypePII,
+		Severity:    "BLOCK",
+		Description: "Email address",
+	})
+
+	tok := tokenizer.NewTokenizer()
+	vm := tokenizer.NewVaultManager(1 * time.Minute)
+	s := NewWithTokenizer(det, tok, vm, "redact")
+
+	ctx := WithRequestMode(context.Background(), "tokenize")
+	result, err := s.SanitizeWithContext(ctx, "Contact john@example.com", "eko_a7f3b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TokenizedCount != 1 {
+		t.Errorf("expected tokenized_count=1 after tokenize override, got %d", result.TokenizedCount)
+	}
+	if strings.Contains(result.SanitizedPrompt, "[REDACTED_EMAIL]") {
+		t.Errorf("expected tokenized output, got redaction marker: %s", result.SanitizedPrompt)
+	}
+	if strings.Contains(result.SanitizedPrompt, "john@example.com") {
+		t.Errorf("email should not appear verbatim in tokenized output: %s", result.SanitizedPrompt)
 	}
 }
 

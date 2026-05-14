@@ -170,6 +170,84 @@ func TestSanitizeHandler_SLMOptIn(t *testing.T) {
 	}
 }
 
+func TestSanitizeHandler_SanitizationModeOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name           string
+		body           string
+		wantStatus     int
+		wantTokenized  bool // true => tokenized_count>0; false => 0 (redact path)
+		wantPromptSubs string
+	}{
+		{
+			name:          "omitted uses configured tokenize default",
+			body:          `{"prompt":"My email is john.doe@example.com"}`,
+			wantStatus:    http.StatusOK,
+			wantTokenized: true,
+		},
+		{
+			name:           "explicit redact overrides tokenize default",
+			body:           `{"prompt":"My email is john.doe@example.com","sanitization_mode":"redact"}`,
+			wantStatus:     http.StatusOK,
+			wantTokenized:  false,
+			wantPromptSubs: "[REDACTED_EMAIL]",
+		},
+		{
+			name:          "explicit tokenize matches configured default",
+			body:          `{"prompt":"My email is john.doe@example.com","sanitization_mode":"tokenize"}`,
+			wantStatus:    http.StatusOK,
+			wantTokenized: true,
+		},
+		{
+			name:       "invalid mode rejected",
+			body:       `{"prompt":"x","sanitization_mode":"obfuscate"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			det := detector.New()
+			loadTestPatterns(t, det)
+
+			tok := tokenizer.NewTokenizer()
+			vm := tokenizer.NewVaultManager(1 * time.Minute)
+			san := sanitizer.NewWithTokenizer(det, tok, vm, "tokenize")
+
+			handler := NewSanitizeHandler(san)
+			router := gin.New()
+			router.POST("/v1/sanitize", handler.Handle)
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/sanitize", bytes.NewReader([]byte(tc.body)))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, rec.Code, rec.Body.String())
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+
+			var resp sanitizer.Result
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+			if tc.wantTokenized && resp.TokenizedCount == 0 {
+				t.Fatalf("expected tokenized output, got prompt=%q", resp.SanitizedPrompt)
+			}
+			if !tc.wantTokenized && resp.TokenizedCount != 0 {
+				t.Fatalf("expected redacted output (tokenized_count=0), got %d in prompt=%q", resp.TokenizedCount, resp.SanitizedPrompt)
+			}
+			if tc.wantPromptSubs != "" && !bytes.Contains([]byte(resp.SanitizedPrompt), []byte(tc.wantPromptSubs)) {
+				t.Fatalf("expected sanitized prompt to contain %q, got %q", tc.wantPromptSubs, resp.SanitizedPrompt)
+			}
+		})
+	}
+}
+
 func loadTestPatterns(t *testing.T, det *detector.Detector) {
 	t.Helper()
 

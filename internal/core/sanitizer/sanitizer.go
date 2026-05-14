@@ -164,6 +164,9 @@ func (s *Sanitizer) SanitizeWithContext(ctx context.Context, input, sessionID st
 	}
 
 	mode := s.mode
+	if override, ok := RequestMode(ctx); ok {
+		mode = override
+	}
 	if mode == "" {
 		mode = "redact"
 	}
