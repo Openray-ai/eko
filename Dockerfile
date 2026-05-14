@@ -65,8 +65,10 @@ COPY --from=builder --chown=eko:eko /build/bin/eko /app/eko
 # Copy default patterns (these are part of the application)
 COPY --from=builder --chown=eko:eko /build/patterns /app/patterns
 
-# Copy example config for reference (actual config will be volume-mounted)
-COPY --from=builder --chown=eko:eko /build/configs/config.example.yaml /app/configs/
+# Copy configs directory: includes config.example.yaml, cors.yml, and any
+# deploy overlay (e.g. config.fly.yaml) present in the build context.
+# Runtime-only files like config.yaml are excluded via .dockerignore.
+COPY --from=builder --chown=eko:eko /build/configs /app/configs
 
 # Switch to non-root user
 USER eko
