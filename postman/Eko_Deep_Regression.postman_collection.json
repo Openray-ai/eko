@@ -1,0 +1,425 @@
+{
+  "info": {
+    "_postman_id": "93a5d3b8-4420-4b9c-9f61-eko-deep-regression",
+    "name": "Ekō Deep Regression - Edge Cases and Failure Modes",
+    "description": "Deep local regression suite for Ekō. This collection uses Postman test scripts to run large request matrices against the running local API. It checks detector bypass attempts, false-positive guards, token/session behavior, SLM contextual detection, proxy headers, SSE violation events, and metrics. Start with `docker compose --profile slm up --build -d` and keep `proxy.slm.timeout_ms` high enough for CPU inference, e.g. 2500ms.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "openAiApiKey",
+      "value": "sk-test-fake-key-for-integration-testing"
+    },
+    {
+      "key": "stableSessionId",
+      "value": "eko_22222222-2222-4222-8222-222222222222"
+    },
+    {
+      "key": "matrixTimeoutMs",
+      "value": "8000"
+    },
+    {
+      "key": "metricsBeforeSlm",
+      "value": "0"
+    },
+    {
+      "key": "metricsAfterSlm",
+      "value": "0"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Baseline Preconditions",
+      "item": [
+        {
+          "name": "Health, readiness, and metrics contract",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "const timeout = Number(pm.collectionVariables.get('matrixTimeoutMs') || 8000);",
+                  "function send(opts) {",
+                  "  opts.timeout = timeout;",
+                  "  return new Promise((resolve, reject) => pm.sendRequest(opts, (err, res) => err ? reject(err) : resolve(res)));",
+                  "}",
+                  "pm.test('GET /health returns healthy', async () => {",
+                  "  const res = await send({ url: `${baseUrl}/health`, method: 'GET' });",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  pm.expect(res.json()).to.include({ service: 'eko', status: 'healthy' });",
+                  "});",
+                  "pm.test('GET /ready returns ready', async () => {",
+                  "  const res = await send({ url: `${baseUrl}/ready`, method: 'GET' });",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  pm.expect(res.json()).to.include({ service: 'eko', status: 'ready' });",
+                  "});",
+                  "pm.test('GET /metrics exposes SLM counters', async () => {",
+                  "  const res = await send({ url: `${baseUrl}/metrics`, method: 'GET' });",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  const body = res.text();",
+                  "  pm.expect(body).to.include('eko_slm_requests_total');",
+                  "  pm.expect(body).to.include('eko_slm_failures_total');",
+                  "  pm.expect(body).to.include('eko_slm_breaker_open');",
+                  "  const match = body.match(/eko_slm_requests_total\\s+(\\d+)/);",
+                  "  pm.collectionVariables.set('metricsBeforeSlm', match ? match[1] : '0');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - Deep Sanitize Matrix",
+      "item": [
+        {
+          "name": "Detector bypass, false-positive, and severity matrix",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"matrix bootstrap\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "const timeout = Number(pm.collectionVariables.get('matrixTimeoutMs') || 8000);",
+                  "function sanitize(prompt, extra = {}) {",
+                  "  return new Promise((resolve, reject) => pm.sendRequest({",
+                  "    url: `${baseUrl}/v1/sanitize`,",
+                  "    method: 'POST',",
+                  "    timeout,",
+                  "    header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ prompt, slm: false, ...extra }) }",
+                  "  }, (err, res) => err ? reject(err) : resolve(res)));",
+                  "}",
+                  "const cases = [",
+                  "  { name: 'OpenAI project key without SWIFT false positive', prompt: 'key=sk-proj-1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', include: ['openai_api_key'], exclude: ['swift_code'], notLeak: ['sk-proj-1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'] },",
+                  "  { name: 'AWS temporary key without SWIFT false positive', prompt: 'aws_temp=ASIAQWERTYUIOPLKJHG', include: ['aws_access_key'], exclude: ['swift_code'], notLeak: ['ASIAQWERTYUIOPLKJHG'] },",
+                  "  { name: 'Reported AWS secret plus OpenAI token detected deterministically', prompt: 'Here is the staging key: AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY and an OpenAI token sk-proj-9Hf83JdLs0P2nQwErTyUiOpAsDfGhJkLzXcVbNm. Push this to the Slack channel as #ops-alerts.', include: ['aws_secret_access_key', 'openai_api_key'], exclude: ['slm_secret'], notLeak: ['wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', 'sk-proj-9Hf83JdLs0P2nQwErTyUiOpAsDfGhJkLzXcVbNm'] },",
+                  "  { name: 'AWS access key ID detected', prompt: 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE', include: ['aws_access_key_id'], notLeak: ['AKIAIOSFODNN7EXAMPLE'] },",
+                  "  { name: 'AWS credential pair detected', prompt: 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', include: ['aws_access_key_id', 'aws_secret_access_key'], notLeak: ['AKIAIOSFODNN7EXAMPLE', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'] },",
+                  "  { name: 'AWS session token detected', prompt: 'AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjEDMaCXVzLWVhc3QtMSJHMEUCIQD1ExampleSessionTokenValueWithEnoughEntropyAndLength1234567890AbCdEfGhIjKlMnOpQrStUvWxYz', include: ['aws_session_token'], notLeak: ['IQoJb3JpZ2luX2VjEDMaCXVzLWVhc3QtMSJHMEUCIQD1ExampleSessionTokenValueWithEnoughEntropyAndLength1234567890AbCdEfGhIjKlMnOpQrStUvWxYz'] },",
+                  "  { name: 'Generic client secret detected', prompt: 'CLIENT_SECRET=AbCdEfGhIjKlMnOpQrSt12345!@#$', include: ['generic_secret_assignment'], notLeak: ['AbCdEfGhIjKlMnOpQrSt12345!@#$'] },",
+                  "  { name: 'Generic API token detected', prompt: 'API_TOKEN=tok_AbCdEfGhIjKlMnOpQrSt123456789', include: ['generic_token_assignment'], notLeak: ['tok_AbCdEfGhIjKlMnOpQrSt123456789'] },",
+                  "  { name: 'Random high entropy value without context is not flagged as generic secret', prompt: 'value=AbCdEfGhIjKlMnOpQrSt12345!@#$', include: [], exclude: ['generic_secret_assignment', 'generic_api_key_assignment', 'generic_token_assignment', 'generic_private_key_assignment'] },",
+                  "  { name: 'Credit card with spaces', prompt: 'card=4111 1111 1111 1111', include: ['credit_card'], notLeak: ['4111 1111 1111 1111'] },",
+                  "  { name: 'Credit card with hyphens', prompt: 'card=4111-1111-1111-1111', include: ['credit_card'], notLeak: ['4111-1111-1111-1111'] },",
+                  "  { name: 'Invalid Luhn card is not flagged', prompt: 'card=4111 1111 1111 1112', include: [], exclude: ['credit_card'] },",
+                  "  { name: 'URL-encoded email detected', prompt: 'email=john.doe%40example.com', include: ['email'], notLeak: ['john.doe%40example.com'] },",
+                  "  { name: 'Unicode-confusable email detected', prompt: 'email=jоhn.doe@exаmple.com', include: ['email'], notLeak: ['jоhn.doe@exаmple.com'] },",
+                  "  { name: 'Split email detected', prompt: 'email parts: john.doe + @example.com', include: ['email'], notLeak: ['john.doe + @example.com'] },",
+                  "  { name: 'Spaced Nigerian phone detected', prompt: 'phone=+234 801 234 5678', include: ['nigerian_phone'], notLeak: ['+234 801 234 5678'] },",
+                  "  { name: 'Lowercase spaced IBAN detected', prompt: 'iban=gb29 nwbk 6016 1331 9268 19', include: ['iban'], notLeak: ['gb29 nwbk 6016 1331 9268 19'] },",
+                  "  { name: 'Valid SWIFT detected', prompt: 'swift=DEUTDEFF500', include: ['swift_code'], notLeak: ['DEUTDEFF500'] },",
+                  "  { name: 'Obfuscated password key detected', prompt: 'p@ssword=Sup3rSecret!', include: ['password_var'], notLeak: ['Sup3rSecret!'] },",
+                  "  { name: 'Quoted password with spaces detected', prompt: 'password=\"correct horse battery staple\"', include: ['password_var'], notLeak: ['correct horse battery staple'] },",
+                  "  { name: 'Escaped credential URI detected across newline', prompt: 'postgres://admin:Very\\nSecret@db.internal:5432/app', include: ['postgres_connection'], notLeak: ['Very\\nSecret'] },",
+                  "  { name: 'Base64 encoded secret detected', prompt: 'blob=cG9zdGdyZXM6Ly9hZG1pbjpTZWNyZXQxMjNAZGIuaW50ZXJuYWw6NTQzMi9wYXltZW50cw==', include: ['base64_encoded_secret'], notLeak: ['cG9zdGdyZXM6Ly9hZG1pbjpTZWNyZXQxMjNAZGIuaW50ZXJuYWw6NTQzMi9wYXltZW50cw=='] },",
+                  "  { name: 'Random base64 is not flagged as secret', prompt: 'blob=VGhpcyBpcyBhIGhhcm1sZXNzIG5vbi1zZWNyZXQgc3RyaW5n', include: [], exclude: ['base64_encoded_secret'] },",
+                  "  { name: 'JWT token detected', prompt: 'jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue', include: ['jwt_token'], notLeak: ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue'] },",
+                  "  { name: 'African fintech bundle detected', prompt: 'BVN 12345678901 NUBAN 0123456789 M-Pesa AB12345678 SA ID 8001015009087 Ghana +233241234567 Kenya +254712345678', includeAny: ['nigerian_bvn', 'nigerian_account', 'mpesa_code', 'south_african_id', 'ghanaian_phone', 'kenyan_phone'], minViolations: 5 },",
+                  "  { name: 'Date and postal context detected', prompt: 'DOB 1990-01-02 and postal code SW1A 1AA', include: ['date_of_birth', 'postal_code'], notLeak: ['1990-01-02', 'SW1A 1AA'] }",
+                  "];",
+                  "cases.forEach(tc => {",
+                  "  pm.test(tc.name, async () => {",
+                  "    const res = await sanitize(tc.prompt);",
+                  "    pm.expect(res.code).to.eql(200);",
+                  "    const json = res.json();",
+                  "    const patterns = (json.violations || []).map(v => v.pattern);",
+                  "    (tc.include || []).forEach(p => pm.expect(patterns, `${tc.name} should include ${p}`).to.include(p));",
+                  "    (tc.exclude || []).forEach(p => pm.expect(patterns, `${tc.name} should not include ${p}`).to.not.include(p));",
+                  "    if (tc.includeAny) pm.expect(patterns.filter(p => tc.includeAny.includes(p)).length).to.be.at.least(tc.minViolations || 1);",
+                  "    if (tc.minViolations) pm.expect(json.violations.length).to.be.at.least(tc.minViolations);",
+                  "    (tc.notLeak || []).forEach(s => pm.expect(json.sanitized_prompt, `${tc.name} leaked ${s}`).to.not.include(s));",
+                  "    if ((tc.include || []).length || tc.includeAny) pm.expect(json.safe).to.eql(false);",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Session and Tokenization Semantics",
+      "item": [
+        {
+          "name": "Session reuse, deterministic tokens, and credential redaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"session bootstrap\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "const timeout = Number(pm.collectionVariables.get('matrixTimeoutMs') || 8000);",
+                  "const session_id = pm.collectionVariables.get('stableSessionId');",
+                  "function sanitize(prompt, extra = {}) {",
+                  "  return new Promise((resolve, reject) => pm.sendRequest({",
+                  "    url: `${baseUrl}/v1/sanitize`, method: 'POST', timeout,",
+                  "    header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ prompt, session_id, slm: false, ...extra }) }",
+                  "  }, (err, res) => err ? reject(err) : resolve(res)));",
+                  "}",
+                  "pm.test('same PII token is stable within a session', async () => {",
+                  "  const a = (await sanitize('Customer email john@company.com')).json();",
+                  "  const b = (await sanitize('Customer email john@company.com')).json();",
+                  "  pm.expect(a.session_id).to.eql(session_id);",
+                  "  pm.expect(b.session_id).to.eql(session_id);",
+                  "  pm.expect(a.sanitized_prompt).to.eql(b.sanitized_prompt);",
+                  "  pm.expect(a.sanitized_prompt).to.not.include('john@company.com');",
+                  "});",
+                  "pm.test('different originals receive different tokens in same session', async () => {",
+                  "  const a = (await sanitize('Email john@company.com')).json();",
+                  "  const b = (await sanitize('Email jane@company.com')).json();",
+                  "  pm.expect(a.sanitized_prompt).to.not.eql(b.sanitized_prompt);",
+                  "});",
+                  "pm.test('credential is removed and not tokenized as stable PII', async () => {",
+                  "  const res = (await sanitize('postgres://admin:secret@localhost:5432/app')).json();",
+                  "  pm.expect(res.violations.map(v => v.pattern)).to.include('postgres_connection');",
+                  "  pm.expect(res.sanitized_prompt).to.not.include('admin:secret');",
+                  "  pm.expect(res.sanitized_prompt).to.match(/REDACTED|X+|\\[|0/);",
+                  "});",
+                  "pm.test('invalid session id is rejected before sanitization', async () => {",
+                  "  const res = await new Promise((resolve, reject) => pm.sendRequest({",
+                  "    url: `${baseUrl}/v1/sanitize`, method: 'POST', timeout, header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ prompt: 'john@company.com', session_id: 'not-valid', slm: false }) }",
+                  "  }, (err, r) => err ? reject(err) : resolve(r)));",
+                  "  pm.expect(res.code).to.eql(400);",
+                  "  pm.expect(res.json().error).to.eql('invalid session_id');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - SLM Contextual and Circuit-Breaker Sensitive Paths",
+      "item": [
+        {
+          "name": "SLM opt-in versus default-off, contextual spans, and metrics delta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"slm bootstrap\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "const timeout = Number(pm.collectionVariables.get('matrixTimeoutMs') || 8000);",
+                  "function send(opts) { opts.timeout = timeout; return new Promise((resolve, reject) => pm.sendRequest(opts, (err, res) => err ? reject(err) : resolve(res))); }",
+                  "function sanitize(prompt, slm) { return send({ url: `${baseUrl}/v1/sanitize`, method: 'POST', header: { 'Content-Type': 'application/json' }, body: { mode: 'raw', raw: JSON.stringify({ prompt, slm }) } }); }",
+                  "function slmCount(body) { const m = body.match(/eko_slm_requests_total\\s+(\\d+)/); return m ? Number(m[1]) : 0; }",
+                  "pm.test('default omitted SLM does not emit SLM person/address', async () => {",
+                  "  const res = await send({ url: `${baseUrl}/v1/sanitize`, method: 'POST', header: { 'Content-Type': 'application/json' }, body: { mode: 'raw', raw: JSON.stringify({ prompt: 'Amina Yusuf lives at 12 Broad Street Lagos and can be reached at +234 802 111 3344' }) } });",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  const patterns = res.json().violations.map(v => v.pattern);",
+                  "  pm.expect(patterns).to.not.include('slm_person');",
+                  "  pm.expect(patterns).to.not.include('slm_address');",
+                  "});",
+                  "pm.test('SLM opt-in detects person/address/phone and does not fail closed', async () => {",
+                  "  const res = await sanitize('Amina Yusuf lives at 12 Broad Street Lagos and can be reached at +234 802 111 3344', true);",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  const json = res.json();",
+                  "  const patterns = json.violations.map(v => v.pattern);",
+                  "  pm.expect(patterns).to.include('slm_person');",
+                  "  pm.expect(patterns).to.include('slm_address');",
+                  "  pm.expect(patterns.some(p => p === 'slm_phone' || p.includes('phone'))).to.eql(true);",
+                  "  pm.expect(json.sanitized_prompt).to.not.include('Amina Yusuf');",
+                  "  pm.expect(json.sanitized_prompt).to.not.include('12 Broad Street Lagos');",
+                  "});",
+                  "pm.test('SLM metrics increment and failure counter stays stable for healthy sidecar', async () => {",
+                  "  const before = slmCount((await send({ url: `${baseUrl}/metrics`, method: 'GET' })).text());",
+                  "  await sanitize('Amina Yusuf lives at 12 Broad Street Lagos', true);",
+                  "  const afterBody = (await send({ url: `${baseUrl}/metrics`, method: 'GET' })).text();",
+                  "  const after = slmCount(afterBody);",
+                  "  pm.collectionVariables.set('metricsAfterSlm', String(after));",
+                  "  pm.expect(after).to.be.greaterThan(before);",
+                  "  pm.expect(afterBody).to.match(/eko_slm_breaker_open\\s+0/);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - Proxy and Streaming Deep Checks",
+      "item": [
+        {
+          "name": "OpenAI proxy headers and SSE violation event matrix",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openAiApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"proxy bootstrap\"}]}"
+            },
+            "url": "{{baseUrl}}/v1/chat/completions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "const timeout = Number(pm.collectionVariables.get('matrixTimeoutMs') || 8000);",
+                  "const auth = `Bearer ${pm.collectionVariables.get('openAiApiKey')}`;",
+                  "function send(path, raw) { return new Promise((resolve, reject) => pm.sendRequest({ url: `${baseUrl}${path}`, method: 'POST', timeout, header: { Authorization: auth, 'Content-Type': 'application/json' }, body: { mode: 'raw', raw: JSON.stringify(raw) } }, (err, res) => err ? reject(err) : resolve(res))); }",
+                  "const acceptable = [200, 400, 401, 403, 429, 500, 502, 503, 504];",
+                  "pm.test('chat completions non-stream reports violation headers before upstream result', async () => {",
+                  "  const res = await send('/v1/chat/completions', { model: 'gpt-4o', messages: [{ role: 'user', content: 'Email user@example.com and db postgres://admin:secret@localhost:5432/app' }] });",
+                  "  pm.expect(acceptable).to.include(res.code);",
+                  "  const count = res.headers.get('X-Eko-Violations-Found');",
+                  "  pm.expect(count).to.not.be.null;",
+                  "  pm.expect(Number(count)).to.be.at.least(2);",
+                  "  const summary = res.headers.get('X-Eko-Violation-Summary') || '';",
+                  "  pm.expect(summary).to.include('pii');",
+                  "  pm.expect(summary).to.include('credential');",
+                  "});",
+                  "pm.test('chat completions streaming prepends violation SSE event when upstream streams', async () => {",
+                  "  const res = await send('/v1/chat/completions', { model: 'gpt-4o', stream: true, messages: [{ role: 'user', content: 'Contact user@example.com before using postgres://admin:secret@localhost:5432/app' }] });",
+                  "  pm.expect(acceptable).to.include(res.code);",
+                  "  if (res.code === 200) pm.expect(res.text()).to.include('eko.violation_report');",
+                  "});",
+                  "pm.test('responses array input reports violations across content blocks', async () => {",
+                  "  const res = await send('/v1/responses', { model: 'gpt-4.1', input: [{ role: 'user', content: [{ type: 'input_text', text: 'Email array@example.com.' }, { type: 'input_text', text: 'Connection postgres://admin:secret@localhost:5432/app.' }] }] });",
+                  "  pm.expect(acceptable).to.include(res.code);",
+                  "  const h = res.headers.get('X-Eko-Violations-Found');",
+                  "  if (h !== null) pm.expect(Number(h)).to.be.at.least(2);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 - Malformed and Boundary Inputs",
+      "item": [
+        {
+          "name": "Malformed JSON, empty values, very large clean input",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"prompt\":\"boundary bootstrap\",\"slm\":false}"
+            },
+            "url": "{{baseUrl}}/v1/sanitize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "const timeout = Number(pm.collectionVariables.get('matrixTimeoutMs') || 8000);",
+                  "function send(raw, contentType = 'application/json') { return new Promise((resolve, reject) => pm.sendRequest({ url: `${baseUrl}/v1/sanitize`, method: 'POST', timeout, header: { 'Content-Type': contentType }, body: { mode: 'raw', raw } }, (err, res) => err ? reject(err) : resolve(res))); }",
+                  "pm.test('malformed JSON is rejected', async () => {",
+                  "  const res = await send('{\"prompt\":');",
+                  "  pm.expect(res.code).to.eql(400);",
+                  "  pm.expect(res.json().error).to.eql('invalid request');",
+                  "});",
+                  "pm.test('empty prompt is rejected by required binding', async () => {",
+                  "  const res = await send(JSON.stringify({ prompt: '', slm: false }));",
+                  "  pm.expect(res.code).to.eql(400);",
+                  "});",
+                  "pm.test('large clean prompt remains safe and does not invent violations', async () => {",
+                  "  const clean = 'safe operational note '.repeat(1200);",
+                  "  const res = await send(JSON.stringify({ prompt: clean, slm: false }));",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  const json = res.json();",
+                  "  pm.expect(json.safe).to.eql(true);",
+                  "  pm.expect(json.violations || []).to.have.length(0);",
+                  "});",
+                  "pm.test('large prompt with one secret still detects the secret', async () => {",
+                  "  const text = 'prefix '.repeat(500) + ' postgres://admin:secret@localhost:5432/app ' + 'suffix '.repeat(500);",
+                  "  const res = await send(JSON.stringify({ prompt: text, slm: false }));",
+                  "  pm.expect(res.code).to.eql(200);",
+                  "  const json = res.json();",
+                  "  pm.expect(json.violations.map(v => v.pattern)).to.include('postgres_connection');",
+                  "  pm.expect(json.sanitized_prompt).to.not.include('admin:secret');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

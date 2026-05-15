@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"eko/internal/core/patterns"
+	"eko/internal/core/secrets"
 	"eko/internal/core/slm"
 	"eko/internal/helpers/logger"
 )
@@ -81,9 +82,15 @@ func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Viola
 		}
 	}
 
+	allViolations := convertSecretFindings(secrets.Detect(input))
+
 	if len(patternList) == 0 {
 		logger.Warn("No patterns loaded for detection", logger.Fields{})
-		return []Violation{}, nil
+		deduped := d.deduplicateViolations(allViolations)
+		sort.Slice(deduped, func(i, j int) bool {
+			return deduped[i].Position < deduped[j].Position
+		})
+		return deduped, nil
 	}
 
 	// Build a request-local semaphore sized to available parallelism, capped at
@@ -145,7 +152,6 @@ func (d *Detector) DetectWithContext(ctx context.Context, input string) ([]Viola
 	}()
 
 	// Collect all violations
-	var allViolations []Violation
 	for violations := range violationsChan {
 		allViolations = append(allViolations, violations...)
 	}
@@ -189,6 +195,24 @@ func convertSLMViolations(in []slm.Violation) []Violation {
 	return out
 }
 
+func convertSecretFindings(in []secrets.Finding) []Violation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Violation, 0, len(in))
+	for _, f := range in {
+		out = append(out, Violation{
+			Type:     f.Type,
+			Severity: f.Severity,
+			Pattern:  f.Pattern,
+			Matched:  f.Matched,
+			Position: f.Position,
+			End:      f.End,
+		})
+	}
+	return out
+}
+
 // detectPattern finds all matches for a single pattern
 func (d *Detector) detectPattern(input string, pattern *patterns.CompiledPattern) []Violation {
 	matches := pattern.Regex.FindAllStringIndex(input, -1)
@@ -225,41 +249,181 @@ func (d *Detector) deduplicateViolations(violations []Violation) []Violation {
 		return violations
 	}
 
-	// Sort by position, then by severity priority
+	// Sort by quality first, then keep every candidate that does not overlap an
+	// already-kept better candidate. This avoids bridge spans suppressing later
+	// non-overlapping findings while still letting provider-specific secrets beat
+	// earlier overlapping generic/SLM spans.
 	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].Position != violations[j].Position {
-			return violations[i].Position < violations[j].Position
-		}
-		priorityI := d.getSeverityPriority(violations[i].Severity)
-		priorityJ := d.getSeverityPriority(violations[j].Severity)
-		if priorityI != priorityJ {
-			return priorityI > priorityJ
-		}
-		typePriorityI := d.getTypePriority(violations[i].Type)
-		typePriorityJ := d.getTypePriority(violations[j].Type)
-		if typePriorityI != typePriorityJ {
-			return typePriorityI > typePriorityJ
-		}
-		lenI := violations[i].End - violations[i].Position
-		lenJ := violations[j].End - violations[j].Position
-		return lenI > lenJ
+		return d.betterViolation(violations[i], violations[j])
 	})
 
-	// Remove overlapping violations using a sweep-line O(n) pass.
-	// Because violations are sorted left-to-right by Position, any new candidate
-	// whose Position >= maxEnd cannot overlap any already-kept violation.
+	keptSpans := violationSpanIndex{}
 	deduped := make([]Violation, 0, len(violations))
-	maxEnd := 0
-	for _, v := range violations {
-		if v.Position >= maxEnd {
-			deduped = append(deduped, v)
-			if v.End > maxEnd {
-				maxEnd = v.End
-			}
+	for _, candidate := range violations {
+		if keptSpans.overlaps(candidate) {
+			continue
 		}
+		keptSpans.insert(candidate)
+		deduped = append(deduped, candidate)
 	}
 
+	sort.Slice(deduped, func(i, j int) bool {
+		if deduped[i].Position != deduped[j].Position {
+			return deduped[i].Position < deduped[j].Position
+		}
+		return d.betterViolation(deduped[i], deduped[j])
+	})
+
 	return deduped
+}
+
+// violationSpanIndex tracks accepted, non-overlapping spans in position order.
+// Dedupe processes candidates in quality order, so the index only answers:
+// "does this candidate overlap anything already accepted?" The AVL tree keeps
+// those lookups and inserts logarithmic even when a prompt has thousands of
+// non-overlapping regex hits.
+type violationSpanIndex struct {
+	root *violationSpanNode
+}
+
+type violationSpanNode struct {
+	violation Violation
+	left      *violationSpanNode
+	right     *violationSpanNode
+	height    int
+}
+
+func (idx *violationSpanIndex) overlaps(v Violation) bool {
+	for node := idx.root; node != nil; {
+		switch {
+		case v.End <= node.violation.Position:
+			node = node.left
+		case v.Position >= node.violation.End:
+			node = node.right
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func (idx *violationSpanIndex) insert(v Violation) {
+	idx.root = insertViolationSpan(idx.root, v)
+}
+
+func insertViolationSpan(node *violationSpanNode, v Violation) *violationSpanNode {
+	if node == nil {
+		return &violationSpanNode{violation: v, height: 1}
+	}
+
+	if compareViolationSpan(v, node.violation) < 0 {
+		node.left = insertViolationSpan(node.left, v)
+	} else if compareViolationSpan(v, node.violation) > 0 {
+		node.right = insertViolationSpan(node.right, v)
+	} else {
+		return node
+	}
+
+	updateViolationSpanHeight(node)
+	return rebalanceViolationSpan(node)
+}
+
+func compareViolationSpan(a, b Violation) int {
+	if a.Position != b.Position {
+		return a.Position - b.Position
+	}
+	if a.End != b.End {
+		return a.End - b.End
+	}
+	if a.Pattern < b.Pattern {
+		return -1
+	}
+	if a.Pattern > b.Pattern {
+		return 1
+	}
+	if a.Matched < b.Matched {
+		return -1
+	}
+	if a.Matched > b.Matched {
+		return 1
+	}
+	return 0
+}
+
+func rebalanceViolationSpan(node *violationSpanNode) *violationSpanNode {
+	balance := violationSpanHeight(node.left) - violationSpanHeight(node.right)
+	if balance > 1 {
+		if violationSpanHeight(node.left.left) < violationSpanHeight(node.left.right) {
+			node.left = rotateViolationSpanLeft(node.left)
+		}
+		return rotateViolationSpanRight(node)
+	}
+	if balance < -1 {
+		if violationSpanHeight(node.right.right) < violationSpanHeight(node.right.left) {
+			node.right = rotateViolationSpanRight(node.right)
+		}
+		return rotateViolationSpanLeft(node)
+	}
+	return node
+}
+
+func rotateViolationSpanLeft(node *violationSpanNode) *violationSpanNode {
+	pivot := node.right
+	node.right = pivot.left
+	pivot.left = node
+	updateViolationSpanHeight(node)
+	updateViolationSpanHeight(pivot)
+	return pivot
+}
+
+func rotateViolationSpanRight(node *violationSpanNode) *violationSpanNode {
+	pivot := node.left
+	node.left = pivot.right
+	pivot.right = node
+	updateViolationSpanHeight(node)
+	updateViolationSpanHeight(pivot)
+	return pivot
+}
+
+func updateViolationSpanHeight(node *violationSpanNode) {
+	leftHeight := violationSpanHeight(node.left)
+	rightHeight := violationSpanHeight(node.right)
+	if leftHeight > rightHeight {
+		node.height = leftHeight + 1
+		return
+	}
+	node.height = rightHeight + 1
+}
+
+func violationSpanHeight(node *violationSpanNode) int {
+	if node == nil {
+		return 0
+	}
+	return node.height
+}
+
+func (d *Detector) betterViolation(a, b Violation) bool {
+	priorityA := d.getSeverityPriority(a.Severity)
+	priorityB := d.getSeverityPriority(b.Severity)
+	if priorityA != priorityB {
+		return priorityA > priorityB
+	}
+	typePriorityA := d.getTypePriority(a.Type)
+	typePriorityB := d.getTypePriority(b.Type)
+	if typePriorityA != typePriorityB {
+		return typePriorityA > typePriorityB
+	}
+	secretPriorityA := d.getSecretPatternPriority(a.Pattern)
+	secretPriorityB := d.getSecretPatternPriority(b.Pattern)
+	if secretPriorityA != secretPriorityB {
+		return secretPriorityA > secretPriorityB
+	}
+	lenA := a.End - a.Position
+	lenB := b.End - b.Position
+	if lenA != lenB {
+		return lenA > lenB
+	}
+	return a.Position < b.Position
 }
 
 // overlaps checks if two violations overlap in position
@@ -289,6 +453,29 @@ func (d *Detector) getTypePriority(patternType string) int {
 	case patterns.TypeFinancial:
 		return 2
 	case patterns.TypePII:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (d *Detector) getSecretPatternPriority(patternName string) int {
+	switch patternName {
+	case patterns.PatternAWSAccessKeyID,
+		patterns.PatternAWSSecretAccessKey,
+		patterns.PatternAWSSessionToken:
+		return 4
+	case patterns.PatternOpenAIAPIKey,
+		patterns.PatternAnthropicAPIKey,
+		patterns.PatternGoogleAPIKey,
+		patterns.PatternAWSAccessKey:
+		return 3
+	case patterns.PatternGenericSecretAssignment,
+		patterns.PatternGenericAPIKeyAssignment,
+		patterns.PatternGenericTokenAssignment,
+		patterns.PatternGenericPrivateKeyAssignment:
+		return 2
+	case "slm_secret":
 		return 1
 	default:
 		return 0
