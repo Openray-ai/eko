@@ -436,70 +436,6 @@ docker run -d \
   openray/eko:latest
 ```
 
-### Docker Compose with Open WebUI
-```yaml
-version: '3.8'
-services:
-  eko:
-    image: openray/eko:latest
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./patterns:/app/patterns
-      
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    ports:
-      - "3000:8080"
-    environment:
-      - OPENAI_API_BASE_URL=http://eko:8080/v1/openai
-    depends_on:
-      - eko
-```
-
-### Kubernetes
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: eko
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: eko
-  template:
-    metadata:
-      labels:
-        app: eko
-    spec:
-      containers:
-      - name: eko
-        image: openray/eko:latest
-        ports:
-        - containerPort: 8080
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-```
-
-### Binary (Direct Installation)
-```bash
-# Download
-wget https://github.com/openray/eko/releases/latest/download/eko-linux-amd64
-
-# Make executable
-chmod +x eko-linux-amd64
-
-# Run
-./eko-linux-amd64 --config config.yaml
-```
-
 ---
 
 ## 📊 Monitoring & Compliance
@@ -607,32 +543,6 @@ Ekō is built for production scale:
 
 ---
 
-## 🤝 Why Ekō?
-
-**vs Azure OpenAI / AWS Bedrock:**
-- ✅ **60-80% cheaper** - $3K-10K/year vs $8K-15K/year
-- ✅ **Actually sanitizes prompts** - Azure/AWS don't inspect content
-- ✅ **Vendor neutral** - OpenAI proxy today; Anthropic and Google on the roadmap. The core `/v1/sanitize` API works with any LLM you call yourself.
-- ✅ **African compliance** - Built-in NDPR, POPIA patterns
-- ✅ **Use both** - Deploy Ekō in front of Azure OpenAI for defense-in-depth
-
-**vs Manual Security Training:**
-- ✅ **Automatic** - No reliance on human memory
-- ✅ **Consistent** - Works 24/7, never gets tired
-- ✅ **Audit trail** - Proof of protection for regulators
-
-**vs DIY Solutions:**
-- ✅ **Production-ready** - Battle-tested patterns
-- ✅ **Maintained** - Regular updates for new threats
-- ✅ **Support available** - Enterprise SLAs
-
-**vs Other AI Gateways (Portkey, LiteLLM):**
-- ✅ **Security-first** - Deep sanitization vs basic filtering
-- ✅ **Compliance-ready** - Built for regulatory requirements
-- ✅ **African expertise** - Understands local data formats
-
----
-
 ## 🌟 Use Cases
 
 ### Financial Services
@@ -729,9 +639,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - **GitHub Discussions**: [Ask questions, share ideas](https://github.com/openray/eko/discussions)
 - **Twitter**: [@OpenRayAI](https://twitter.com/OpenRayAI)
-- **Email**: hello@openray.ai
-- **Enterprise Support**: enterprise@openray.ai
-
 ---
 
 ## ⚡ Quick Links
