@@ -84,7 +84,7 @@ The easiest way to secure your AI stack. Just change your API base URL:
 **Docker Deployment:**
 ```bash
 # Run Ekō proxy
-docker run -p 8080:8080 openray/eko:latest
+docker run -p 8080:8080 openray/eko:main-latest
 
 # Test it
 curl -X POST http://localhost:8080/v1/openai/chat/completions \
@@ -433,7 +433,7 @@ docker run -d \
   -p 8080:8080 \
   -v $(pwd)/config.yaml:/app/config.yaml \
   -v $(pwd)/patterns:/app/patterns \
-  openray/eko:latest
+  openray/eko:main-latest
 ```
 
 ---
