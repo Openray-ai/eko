@@ -10,17 +10,13 @@
 
 Your team wants to use AI for productivity, but every prompt is a potential data breach:
 ```diff
-- User prompt: "Debug this error: postgres://admin:SecureP@ss123@prod-db.company.com"
-- User prompt: "Analyze customer feedback from BVN 12345678901 and account 0123456789"
-- User prompt: "Here's our API key for testing: sk-proj-abc123xyz..."
+- User prompt: "Amina Yusuf can be reached at +234 802 111 3344. Her BVN is 22334455667 and she lives at No. 30 Ikeja Road, Lagos. Amina Obi is the head of IT and in charge of database administration."
 
-+ Ekō sanitized: "Debug this error: postgres://[REDACTED]@[REDACTED]"
-+ Ekō sanitized: "Analyze customer feedback from BVN [REDACTED] and account [REDACTED]"
-+ Ekō sanitized: "Here's our API key for testing: [REDACTED_API_KEY]"
++ Ekō sanitized: "Xxxxx Xxxxc can be reached at +234 000 000 0001. Her BVN is 00000000001 and she lives at Xx. 02 Xxxxx Xxxx, Xxxxx. Xxxxx Xxa is the head of IT and in charge of database administration."
 ```
 
 **The risks are real:**
-- Production credentials leaked to ChatGPT
+- Production credentials leaked to AI tools. 
 - Customer PII sent to third-party AI providers
 - Compliance violations (NDPR, POPIA, GDPR, PCI-DSS)
 - Business intelligence exposed to competitors
@@ -87,7 +83,7 @@ The easiest way to secure your AI stack. Just change your API base URL:
 docker run -p 8080:8080 openray/eko:main-latest
 
 # Test it
-curl -X POST http://localhost:8080/v1/openai/chat/completions \
+curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer YOUR_OPENAI_KEY" \
   -H "Content-Type: application/json" \
   -d '{
