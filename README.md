@@ -637,17 +637,15 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 💬 Community & Support
 
-- **GitHub Discussions**: [Ask questions, share ideas](https://github.com/openray/eko/discussions)
+- **GitHub Discussions**: [Ask questions, share ideas](https://github.com/Openray-ai/eko/discussions)
 - **Twitter**: [@OpenRayAI](https://twitter.com/OpenRayAI)
 ---
 
 ## ⚡ Quick Links
 
-- [🐛 Report a Bug](https://github.com/openray/eko/issues/new?template=bug_report.md)
-- [💡 Request a Feature](https://github.com/openray/eko/issues/new?template=feature_request.md)
-- [🎯 Suggest a Pattern](https://github.com/openray/eko/issues/new?template=pattern_suggestion.md)
-- [📖 Read the Docs](https://docs.openray.ai/eko)
-
+- [🐛 Report a Bug](https://github.com/Openray-ai/eko/issues/new?template=bug_report.md)
+- [💡 Request a Feature](https://github.com/Openray-ai/eko/issues/new?template=feature_request.md)
+- [🎯 Suggest a Pattern](https://github.com/Openray-ai/eko/issues/new?template=pattern_suggestion.md)
 ---
 
 <p align="center">
