@@ -1,8 +1,6 @@
 # 🛡️ Ekō
 
-> Blazing-fast prompt sanitization for AI - Prevent data leaks before they happen
-
-**Ekō** is an open-source, context-aware security proxy that prevents your organization from leaking sensitive data to AI services. Built in Go for maximum performance, it sits between your applications and AI providers (OpenAI today; Anthropic and Google on the roadmap) and combines deterministic pattern matching with an optional finetuned SLM for contextual detection — with first-class detectors for African fintech and banking compliance (BVN, NUBAN, NIN, M-Pesa, SA ID, and more).
+**Ekō** is an open-source, context-aware security proxy that prevents your organization from leaking sensitive data to AI services. It sits between your application and an AI provider, detects sensitive data in prompts, and either redacts or tokenizes that data before it leaves your environment — with first-class detectors for African regulated domains.
 
 ---
 
@@ -10,25 +8,12 @@
 
 Your team wants to use AI for productivity, but every prompt is a potential data breach:
 ```diff
-- User prompt: "Amina Yusuf can be reached at +234 802 111 3344. Her BVN is 22334455667 and she lives at No. 30 Ikeja Road, Lagos. Amina Obi is the head of IT and in charge of database administration."
+- User prompt: "Amina Yusuf can be reached at +234 802 111 3344. Her BVN is 22334455667 and the team debugs against postgres://admin:p4ss@prod-db:5432/core."
 
-+ Ekō sanitized: "Xxxxx Xxxxc can be reached at +234 000 000 0001. Her BVN is 00000000001 and she lives at Xx. 02 Xxxxx Xxxx, Xxxxx. Xxxxx Xxa is the head of IT and in charge of database administration."
++ Ekō sanitized: "Amina Yusuf can be reached at [REDACTED_PHONE]. Her BVN is [REDACTED_BVN] and the team debugs against [REDACTED_DB_CONNECTION]."
 ```
 
-**The risks are real:**
-- Production credentials leaked to AI tools. 
-- Customer PII sent to third-party AI providers
-- Compliance violations (NDPR, POPIA, GDPR, PCI-DSS)
-- Business intelligence exposed to competitors
-- Regulatory fines and customer trust erosion
-
-**Traditional solutions fail:**
-- ❌ Azure OpenAI/AWS Bedrock cost $8K-15K/year and *don't sanitize prompts*
-- ❌ Banning AI entirely means losing competitive advantage
-- ❌ Security training doesn't prevent human error under pressure
-- ❌ Manual review of every prompt is impractical
-
-**Ekō solves this** — automatically, instantly, transparently.
+Regex detection catches structured identifiers (phone, BVN, DB URLs) on its own. Contextual PII such as the person's name is caught when the optional [SLM detector](#-optional-slm-detection-contextual) is enabled.
 
 ---
 
@@ -57,85 +42,134 @@ Ekō sits between your applications and AI providers, inspecting and sanitizing 
 │              │                   │
 │  ┌───────────▼───────────────┐  │
 │  │    Sanitization Logic     │  │
-│  │    • Redact/Replace       │  │
-│  │    • Alert/Log/Block      │  │
+│  │    • Redact / Tokenize    │  │
+│  │    • Alert / Log / Block  │  │
 │  └───────────┬───────────────┘  │
 └──────────────┼───────────────────┘
                │ Sanitized prompt
                ▼
        ┌───────────────┐
        │   AI Provider │
-       │ (OpenAI, etc) │
+       │ (OpenAI API)  │
        └───────────────┘
 ```
+
+Use Ekō when teams need to adopt AI tooling without sending raw credentials, customer records, regulated identifiers, or internal business data directly to third-party model providers.
+
+---
+
+## 📋 Current Status
+
+| Area | Status |
+| --- | --- |
+| Core sanitization API (`POST /v1/sanitize`) | ✅ Available |
+| OpenAI chat completions proxy (`POST /v1/chat/completions`) | ✅ Available |
+| OpenAI Responses API proxy (`POST /v1/responses`) | ✅ Available |
+| Prometheus metrics | ✅ Available |
+| Redaction mode | ✅ Available |
+| Tokenization mode | ✅ Available |
+| Redis-backed token vault | ✅ Available |
+| Optional SLM sidecar | ✅ Available, opt-in |
+| Anthropic proxy routes | 🚧 Roadmap |
+| Google proxy routes | 🚧 Roadmap |
+| Compliance report export endpoints | 🚧 Roadmap |
 
 ---
 
 ## 🚀 Quick Start
 
-### Option 1: Proxy Mode (Recommended - Zero Code Changes)
+### Option 1: Run Locally With Go
 
-The easiest way to secure your AI stack. Just change your API base URL:
+Requirements: **Go 1.24+**
 
-**Docker Deployment:**
 ```bash
-# Run Ekō proxy
-docker run -p 8080:8080 openray/eko:main-latest
-
-# Test it
-curl -X POST http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_OPENAI_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "My password is admin123"}]
-  }'
+make install
+make run-config
 ```
 
-**Python Integration (OpenAI):**
+The server starts on `http://localhost:8080` using `configs/config.example.yaml`. Verify it is up:
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+```
+
+### Option 2: Run With Docker Compose
+
+`docker-compose.yml` expects a local config file:
+
+```bash
+cp configs/config.example.yaml configs/config.yaml
+mkdir -p reports patterns/custom
+docker compose up --build
+```
+
+### Option 3: Run the Docker Image Directly
+
+```bash
+docker run --rm -p 8080:8080 openray/eko:main-latest
+```
+
+If you need custom configuration or patterns, prefer Docker Compose so the required files can be mounted explicitly.
+
+---
+
+## 🔌 OpenAI Proxy (Recommended — Near-Zero Code Changes)
+
+The easiest way to secure your AI stack. Ekō exposes OpenAI-compatible routes under `/v1`:
+
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+
+Just point the OpenAI SDK at Ekō instead of OpenAI:
+
 ```python
 from openai import OpenAI
 
-# Just point to Ekō instead of OpenAI
 client = OpenAI(
     api_key="sk-your-key",
-    base_url="http://localhost:8080/v1/openai"  # ← Only change needed!
+    base_url="http://localhost:8080/v1",  # ← Only change needed!
 )
 
-# Use normally - sanitization happens automatically
 response = client.chat.completions.create(
     model="gpt-4",
     messages=[{
-        "role": "user", 
-        "content": "Debug: Connection failed to postgres://admin:password@prod-db:5432"
-    }]
+        "role": "user",
+        "content": "Debug this: postgres://admin:password@prod-db:5432/app",
+    }],
 )
-
-# Check if anything was sanitized
-violations = response.response.headers.get('X-Eko-Violations')
-if violations and int(violations) > 0:
-    print(f"⚠️ Ekō sanitized {violations} sensitive items")
 ```
 
-**Python Integration (Anthropic) — coming soon:**
-```python
-# Anthropic proxy support is on the roadmap.
-# For now, use the Core API (Option 2 below) to sanitize prompts before
-# passing them to the Anthropic SDK directly.
-```
-
-**Environment Variables (OpenAI):**
+**Environment variable form:**
 ```bash
-export OPENAI_BASE_URL="http://localhost:8080/v1/openai"
-
+export OPENAI_BASE_URL="http://localhost:8080/v1"
 # Now all OpenAI calls are automatically protected
 ```
 
-### Option 2: Core API (Custom Integrations)
+Ekō forwards the sanitized request to the configured upstream OpenAI base URL. For non-streaming requests in tokenization mode, Ekō can also resolve response tokens back through the session vault before returning the response. Streaming requests are sanitized in redaction mode because response token resolution is not supported on streamed chunks.
 
-For custom workflows where you need explicit control:
+**Useful response headers:**
+
+| Header | Meaning |
+| --- | --- |
+| `X-Eko-Session-ID` | Session used for tokenization and response resolution |
+| `X-Eko-Violations-Found` | Number of detected violations |
+| `X-Eko-Redacted-Count` | Number of redacted spans |
+| `X-Eko-Tokens-Issued` | Number of tokens created |
+| `X-Eko-Sanitization-Mode` | Active mode, usually `redact` or `tokenize` |
+| `X-Eko-Sanitization-Override` | Explains forced behavior, such as streaming fallback |
+| `X-Eko-Resolve-Status` | Response token resolution result |
+| `X-Eko-Violation-Summary` | Compact summary of violation types |
+
+> **Anthropic & Google proxies:** routes are on the roadmap. For now, use the Core API below to sanitize prompts before passing them to those SDKs directly.
+
+---
+
+## 🧩 Core API — `POST /v1/sanitize`
+
+For custom workflows where you need explicit control over sanitization before calling an AI provider yourself:
+
 ```bash
-# Sanitize a prompt
 curl -X POST http://localhost:8080/v1/sanitize \
   -H "Content-Type: application/json" \
   -d '{
@@ -143,10 +177,20 @@ curl -X POST http://localhost:8080/v1/sanitize \
   }'
 ```
 
+**Request fields:**
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `prompt` | Yes | Text to inspect and sanitize |
+| `session_id` | No | Existing Ekō session for stable token reuse |
+| `sanitization_mode` | No | Per-request override: `redact` or `tokenize` |
+| `slm` | No | Opt this request into contextual SLM detection (when enabled) |
+
 **Response:**
 ```json
 {
-  "sanitized_prompt": "My BVN is 00000000001 and email is user_aaa@example.com",
+  "original_prompt": "My BVN is 12345678901 and email is john@company.com",
+  "sanitized_prompt": "My BVN is [REDACTED_BVN] and email is [REDACTED_EMAIL]",
   "violations": [
     {
       "type": "pii",
@@ -165,11 +209,13 @@ curl -X POST http://localhost:8080/v1/sanitize \
   ],
   "safe": false,
   "processing_time_ms": 2.1,
-  "redacted_count": 0,
-  "tokenized_count": 2,
+  "redacted_count": 2,
+  "tokenized_count": 0,
   "session_id": "eko_123e4567-e89b-12d3-a456-426614174000"
 }
 ```
+
+The exact redaction labels depend on the matched pattern definitions.
 
 To reuse tokens across requests, pass the same `session_id` back:
 ```bash
@@ -181,16 +227,19 @@ curl -X POST http://localhost:8080/v1/sanitize \
   }'
 ```
 
-Note: credentials (e.g. database connection strings, cloud keys) are always redacted, even in tokenization mode.
+If you don't provide a `session_id`, Ekō generates one and returns it.
 
-### Redact vs Tokenize
+---
+
+## 🔁 Redact vs Tokenize
+
 Ekō supports two sanitization modes:
-- `redact`: Replace matched data with labels like `[REDACTED_EMAIL]`. This is the default.
-- `tokenize`: Replace matched data with **stable, reversible tokens** within a session (for supported PII/financial patterns). The response includes `session_id` so you can reuse the same tokens in subsequent requests.
+
+- **`redact`** — replace matched data with labels like `[REDACTED_EMAIL]`. This is the default.
+- **`tokenize`** — replace matched data with **stable, reversible tokens** within a session (for supported PII/financial patterns). Reuse the same `session_id` to keep replacements consistent across requests.
 
 Behavior details:
-- `/v1/sanitize` returns `session_id` and uses session-aware sanitization. If you don’t provide one, Ekō generates it.
-- **Credentials are never tokenized** (API keys, DB connection strings, cloud keys, etc.); they are always redacted.
+- **Credentials are never tokenized** (API keys, DB connection strings, cloud keys, etc.) — they are always redacted, even in tokenization mode.
 - `LOG` severity patterns are **not** modified in either mode.
 
 ---
@@ -202,120 +251,69 @@ Behavior details:
 - Database connection strings (PostgreSQL, MongoDB, MySQL)
 - JWT tokens and OAuth credentials
 - SSH private keys and certificates
-- Environment variables (API_KEY=, PASSWORD=)
+- Environment-style secrets (`API_KEY=`, `PASSWORD=`)
 
 ### 👤 Personal Identifiable Information (PII)
 - **Nigerian**: BVN, NIN, NUBAN account numbers, phone (+234)
 - **Kenyan**: M-Pesa formats, ID numbers, phone (+254)
 - **South African**: ID numbers (13 digits), phone (+27)
 - **Ghanaian**: Mobile Money, phone (+233)
-- **Universal**: Emails, generic phone numbers, IBAN, SWIFT codes
+- **Universal**: emails, generic phone numbers, IBAN, SWIFT/BIC codes
 
 ### 💳 Financial Data
-- Credit card numbers (Luhn algorithm validated)
+- Credit card numbers
 - Bank account numbers
-- CVV codes
-- Transaction IDs
-- Currency amounts (configurable thresholds)
+- Transaction references
 
 ### 🏢 Custom Business Patterns
-- Employee IDs
-- Customer account numbers
-- Project codenames
-- Internal system identifiers
-- Any regex pattern you define
+Add organization-specific patterns under `patterns/custom`:
+```yaml
+# patterns/custom/company-secrets.yaml
+patterns:
+  - name: "employee_id"
+    regex: "EMP-[0-9]{6}"
+    type: "pii"
+    severity: "BLOCK"
+    description: "Company employee ID format"
+
+  - name: "project_codename"
+    regex: "Project\\s+(Phoenix|Atlas|Titan)"
+    type: "business_intelligence"
+    severity: "WARN"
+    description: "Internal project codenames"
+```
 
 ---
 
 ## 🎨 Configuration
 
-Create a `config.yaml` to customize behavior:
-```yaml
-server:
-  port: 8080
-  host: "0.0.0.0"
-
-# Proxy behavior on violations
-proxy:
-  openai:
-    enabled: true
-    base_url: "https://api.openai.com/v1"
-
-  # anthropic and google proxies: coming in Phase 2
-
-  behavior:
-    on_violation: "sanitize"  # Options: block, sanitize, warn
-    log_requests: true
-    add_violation_headers: true
-    sanitization_mode: "tokenize"  # Options: redact, tokenize
-    token_store_backend: "memory"  # Options: memory, redis
-    token_ttl_ms: 30000            # Token vault TTL in ms (tokenize mode only)
-
-  redis:
-    addr: "127.0.0.1:6379"
-    username: ""
-    password: ""
-    db: 0
-    key_prefix: "eko:"
-    meta_suffix: "vault_meta:"
-    payload_suffix: "vault_payload:"
-    pool_size: 10
-    min_idle_conns: 2
-    dial_timeout_ms: 100
-    read_timeout_ms: 100
-    write_timeout_ms: 100
-    max_retries: 3
-
-  crypto:
-    provider: "local"  # Options: local, vault-transit
-    active_key_id: "local-dev"
-    local_master_key: "BASE64_32_BYTE_AES_KEY"
-    fallback_keys: []
-    vault_transit:
-      address: "https://vault.example.com"
-      token: "VAULT_TOKEN"
-      namespace: ""
-      mount: "transit"
-      key_name: "eko-session"
-      timeout_ms: 2000
-      tls_skip_verify: false
+Start from the example config:
+```bash
+cp configs/config.example.yaml configs/config.yaml
 ```
 
-> **Secrets**: do not commit `local_master_key` or the Vault `token` to source
-> control. Inject them through your secrets manager at deploy time.
+Important sections:
 
-#### Rotating the local master key
+| Section | Purpose |
+| --- | --- |
+| `server` | Host and port |
+| `logging` | Log level, format, color, and output file |
+| `proxy.openai` | OpenAI proxy enablement, upstream base URL, and timeout |
+| `proxy.behavior` | Violation behavior, sanitization mode, token store, and TTL |
+| `proxy.redis` | Redis-backed token vault settings |
+| `proxy.crypto` | Local or Vault Transit key provider settings |
+| `proxy.slm` | Optional contextual SLM detector settings |
+| `patterns` | Default and custom pattern locations |
+| `alerts` | Webhook and email alerting |
+| `compliance` | Reporting, retention, and allowed browser origins |
 
-The Redis-backed store seals each session with a random data key wrapped by
-the active master key. To rotate without invalidating live sessions:
+> `proxy.anthropic` and `proxy.google` sections exist in the example config, but those proxy routes are not yet served — they are roadmap items.
 
-1. Add an entry to `crypto.fallback_keys` whose `key_id` equals the current
-   `crypto.active_key_id` and whose `master_key` is the current
-   `crypto.local_master_key`. Roll this config to **all** replicas first.
-2. Set `crypto.active_key_id` and `crypto.local_master_key` to the new pair
-   and roll out.
-3. New writes use the new key; existing sessions continue to decrypt via the
-   fallback entry.
-4. Once `proxy.behavior.token_ttl_ms` has elapsed for all live sessions, the
-   fallback entry can be removed in a third rollout.
+> **Secrets**: do not commit `local_master_key`, the Vault `token`, or provider API keys to source control. Inject them through your secrets manager at deploy time.
 
-> **Multi-replica caveat**: rolling out steps 1 and 2 in the wrong order — or
-> rolling step 2 to some replicas before step 1 reaches all of them — will
-> cause replicas on the old config to fail decrypting payloads written by the
-> new active key. Failures are non-destructive (ciphertext is preserved) but
-> requests will return 503 until config converges.
-
-For Vault Transit, key rotation is performed inside Vault and is transparent
-to Eko — the stored key id is `vault-transit:{mount}/{key_name}` and Vault
-selects the appropriate key version on decrypt.
+### Alerting & Compliance
 
 ```yaml
-# Pattern management
-patterns:
-  config_file: "./patterns/default.yaml"
-  custom_patterns_dir: "./patterns/custom"
-
-# Alerting
 alerts:
   webhooks:
     - url: "https://hooks.slack.com/services/YOUR/WEBHOOK"
@@ -326,54 +324,39 @@ alerts:
     from: "alerts@company.com"
     to: ["security@company.com"]
 
-# Compliance
 compliance:
   enable_reporting: true
   report_dir: "./reports"
   retention_days: 90
+  allowed_origins: ["http://localhost:3000", "https://eko.openray.ai"]
 ```
 
-### Add Custom Patterns
-```yaml
-# patterns/custom/company-secrets.yaml
-patterns:
-  - name: "employee_id"
-    regex: "EMP-[0-9]{6}"
-    type: "pii"
-    severity: "BLOCK"
-    description: "Company employee ID format"
-    
-  - name: "project_codename"
-    regex: "Project\\s+(Phoenix|Atlas|Titan)"
-    type: "business_intelligence"
-    severity: "WARN"
-    description: "Internal project codenames"
-    
-  - name: "customer_account"
-    regex: "ACCT[0-9]{10}"
-    type: "financial"
-    severity: "BLOCK"
-    description: "Customer account numbers"
-```
+### 🔐 Rotating the local master key
 
-### Optional SLM Detection (Contextual)
+The Redis-backed store seals each session with a random data key wrapped by the active master key. To rotate without invalidating live sessions:
 
-Regex catches structured tokens (BVN, NUBAN, API keys). For **contextual** PII —
-person names, addresses, dates tied to a record — Ekō can call an optional Small
-Language Model sidecar that runs `openai/privacy-filter` with the
-`iamSamurai/privacy-filter-nigeria` LoRA adapter. When enabled, the SLM runs in
-parallel with regex detection and merges into the same redaction/tokenization
-pipeline.
+1. Add an entry to `crypto.fallback_keys` whose `key_id` equals the current `crypto.active_key_id` and whose `master_key` is the current `crypto.local_master_key`. Roll this config to **all** replicas first.
+2. Set `crypto.active_key_id` and `crypto.local_master_key` to the new pair and roll out.
+3. New writes use the new key; existing sessions continue to decrypt via the fallback entry.
+4. Once `proxy.behavior.token_ttl_ms` has elapsed for all live sessions, the fallback entry can be removed in a third rollout.
 
-The sidecar is shipped in this repo at `slm-sidecar/` and wired up in
-`docker-compose.yml` behind a `slm` profile so the default `docker compose up`
-stays Go-only. To run with SLM:
+> **Multi-replica caveat**: rolling out steps 1 and 2 in the wrong order — or rolling step 2 to some replicas before step 1 reaches all of them — will cause replicas on the old config to fail decrypting payloads written by the new active key. Failures are non-destructive (ciphertext is preserved) but requests will return 503 until config converges.
+
+For Vault Transit, key rotation is performed inside Vault and is transparent to Ekō — the stored key id is `vault-transit:{mount}/{key_name}` and Vault selects the appropriate key version on decrypt.
+
+---
+
+## 🧠 Optional SLM Detection (Contextual)
+
+Regex catches structured tokens (BVN, NUBAN, API keys). For **contextual** PII — person names, addresses, dates tied to a record — Ekō can call an optional Small Language Model sidecar that runs `openai/privacy-filter` with the `iamSamurai/privacy-filter-nigeria` LoRA adapter. When enabled, the SLM runs in parallel with regex detection and merges into the same redaction/tokenization pipeline.
+
+The sidecar ships in this repo at `slm-sidecar/` and is wired into `docker-compose.yml` behind a `slm` profile so the default `docker compose up` stays Go-only:
 
 ```bash
 docker compose --profile slm up --build
 ```
 
-It is **off by default** in Ekō — enable in `configs/config.yaml`:
+It is **off by default** — enable it in `configs/config.yaml`:
 
 ```yaml
 proxy:
@@ -385,22 +368,11 @@ proxy:
     breaker:
       failure_threshold: 5       # consecutive failures before tripping
       cooldown_ms: 30000         # how long to skip SLM after tripping
-    # Optional per-label overrides (see internal/core/slm/mapping.go):
-    # labels:
-    #   private_phone: { severity: "BLOCK" }
 ```
 
-**Failure mode:** soft-fail with circuit breaker. If the sidecar is slow,
-unreachable, or returns errors, Ekō logs a warning, increments
-`eko_slm_failures_total`, and continues with regex-only detection. Requests
-never fail because SLM is down. After `failure_threshold` consecutive failures
-the breaker trips and SLM is skipped entirely until `cooldown_ms` has elapsed.
+**Failure mode:** soft-fail with circuit breaker. If the sidecar is slow, unreachable, or returns errors, Ekō logs a warning, increments `eko_slm_failures_total`, and continues with regex-only detection. Requests never fail because SLM is down. After `failure_threshold` consecutive failures the breaker trips and SLM is skipped entirely until `cooldown_ms` has elapsed.
 
-**Per-request opt-in for `POST /v1/sanitize`:** the config flag controls
-whether the SLM client is wired up at startup. Independently, the sanitize
-endpoint accepts an `slm` boolean in the request body that toggles SLM use
-*for that single request*. Defaults to `false` when omitted — callers must
-opt in explicitly:
+**Per-request opt-in for `POST /v1/sanitize`:** the config flag controls whether the SLM client is wired up at startup. Independently, the sanitize endpoint accepts an `slm` boolean in the request body that toggles SLM use *for that single request*. It defaults to `false` when omitted — callers must opt in explicitly:
 
 ```bash
 # Regex-only (default behaviour)
@@ -414,32 +386,31 @@ curl -X POST localhost:8080/v1/sanitize \
   -d '{"prompt":"Amina Yusuf called from +234 802 111 3344","slm":true}'
 ```
 
-Other endpoints (the OpenAI proxy paths) are unaffected — they always use SLM
-when the config flag enables it.
-
-See `slm-sidecar/README.md` for sidecar details.
+The OpenAI proxy paths always use SLM when the config flag enables it. See `slm-sidecar/README.md` for sidecar details.
 
 ---
 
-## 🏗️ Deployment Options
+## 🏗️ Deployment
 
-### Docker (Recommended)
 ```bash
 docker run -d \
   -p 8080:8080 \
-  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/configs/config.yaml:/app/configs/config.yaml:ro \
   -v $(pwd)/patterns:/app/patterns \
   openray/eko:main-latest
 ```
 
 ---
 
-## 📊 Monitoring & Compliance
+## 📊 Monitoring
 
-### Built-in Metrics
+Health and readiness:
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+```
 
 Ekō exposes a Prometheus-compatible plaintext metrics endpoint:
-
 ```bash
 curl http://localhost:8080/metrics
 ```
@@ -458,84 +429,21 @@ eko_sanitizations_total 987
 # TYPE eko_violations_total counter
 eko_violations_total 312
 
-# HELP eko_errors_total Total number of errors encountered during sanitization
-# TYPE eko_errors_total counter
-eko_errors_total 2
-
 # HELP eko_uptime_seconds Number of seconds since the process started
 # TYPE eko_uptime_seconds gauge
 eko_uptime_seconds 3600.00
-
-# HELP eko_goroutines Current number of goroutines
-# TYPE eko_goroutines gauge
-eko_goroutines 14
-
-# HELP eko_memory_alloc_bytes Currently allocated heap memory in bytes
-# TYPE eko_memory_alloc_bytes gauge
-eko_memory_alloc_bytes 4823040
-
-# HELP eko_memory_sys_bytes Total memory obtained from the OS in bytes
-# TYPE eko_memory_sys_bytes gauge
-eko_memory_sys_bytes 24379392
 ```
 
-These metrics can be scraped directly by Prometheus. Add Ekō to your `prometheus.yml`:
+Add Ekō to your `prometheus.yml`:
 ```yaml
 scrape_configs:
-  - job_name: 'eko'
+  - job_name: "eko"
     static_configs:
-      - targets: ['localhost:8080']
+      - targets: ["localhost:8080"]
     metrics_path: /metrics
 ```
 
-```bash
-# Health check
-curl http://localhost:8080/health
-curl http://localhost:8080/ready
-```
-
-### Violation Logging
-Every sanitization is logged for compliance:
-```json
-{
-  "timestamp": "2025-01-15T10:30:45Z",
-  "user_id": "user@company.com",
-  "violation_type": "api_key",
-  "pattern": "openai_api_key",
-  "severity": "BLOCK",
-  "provider": "openai",
-  "action_taken": "sanitized",
-  "compliance_frameworks": ["NDPR", "PCI-DSS"]
-}
-```
-
-### Compliance Reports
-Generate audit-ready reports:
-```bash
-# Export violations for last 30 days
-curl http://localhost:8080/v1/compliance/report?days=30 > compliance-report.pdf
-
-# CSV export for analysis
-curl http://localhost:8080/v1/compliance/export?format=csv > violations.csv
-```
-
----
-
-## 🚦 Performance
-
-Ekō is built for production scale:
-
-| Metric | Target | Actual |
-|--------|--------|--------|
-| **Core API Latency (p95)** | <5ms | 2-4ms |
-| **Proxy End-to-End (p95)** | <50ms | 25-45ms |
-| **Throughput** | 1000 req/s | 1200+ req/s |
-| **Memory Footprint** | <100MB | ~50MB |
-| **Concurrent Connections** | 500+ | Tested to 1000+ |
-| **Pattern Accuracy** | >95% | 97.3% |
-| **False Positive Rate** | <2% | 1.4% |
-
-*Benchmarked on: 4 vCPU, 8GB RAM, 1000 concurrent requests*
+See `docs/BENCHMARKS.md` for component-level benchmark methodology and baseline results.
 
 ---
 
@@ -544,35 +452,29 @@ Ekō is built for production scale:
 ### Financial Services
 Deploy Ekō as infrastructure to protect customer data while enabling AI productivity:
 ```
-500-person bank → Open WebUI → Ekō → Claude API
-                               ↓
-                    Blocks 200+ violations/month
-                    (BVNs, account numbers, credentials)
+Bank → Open WebUI → Ekō → OpenAI API
+                     ↓
+        Blocks BVNs, account numbers, and credentials before they leave
 ```
 
 ### Healthcare
-HIPAA/local health data protection:
+Health data protection:
 ```
 Patient: "Analyze symptoms for patient ID MRN-123456"
          ↓
-Ekō:     "Analyze symptoms for patient ID [REDACTED_MRN]"
+Ekō:     "Analyze symptoms for patient ID [REDACTED]"
 ```
 
 ### Software Development
 Prevent credential leaks during debugging:
 ```
-Developer: "Fix error: FATAL: password authentication failed for user 'admin'"
+Developer: "Fix error: connection failed to postgres://admin:password@prod-db:5432"
            ↓
-Ekō:       "Fix error: FATAL: password authentication failed for user '[REDACTED]'"
+Ekō:       "Fix error: connection failed to [REDACTED_DB_CONNECTION]"
 ```
 
 ### Enterprise Knowledge Work
-Safe AI adoption across departments:
-```
-Marketing → Ekō → OpenAI (sanitized campaigns)
-Finance   → Ekō → Claude (sanitized analysis)
-Legal     → Ekō → Local LLM (stays on-prem)
-```
+Safe AI adoption across departments — Marketing, Finance, and Legal all route through Ekō before reaching the model provider.
 
 ---
 
@@ -580,26 +482,26 @@ Legal     → Ekō → Local LLM (stays on-prem)
 
 **✅ Phase 1: Core (Current)**
 - Core detection engine
-- OpenAI proxy
+- OpenAI chat completions + Responses proxy
 - African-specific patterns (BVN, M-Pesa, NUBAN, regional phones)
+- Redaction and session-aware tokenization (memory + Redis vault)
 - Prometheus-compatible metrics endpoint
-- Docker deployment
+- Docker / Docker Compose deployment
 
 **🚧 Phase 2: Enterprise (Next)**
-- Anthropic proxy
-- Google AI proxy
-- Open WebUI integration
+- Anthropic proxy routes
+- Google AI proxy routes
+- Open WebUI deployment examples
 - Admin dashboard
 - SSO integration (SAML, LDAP, AD)
-- Advanced compliance reporting
-- Multi-tenancy support
+- Advanced compliance reporting & export endpoints
+- Multi-tenant policy management
 
 **🚧 Phase 3: Advanced (in progress)**
 - Optional SLM module for contextual detection (`slm-sidecar/`, opt-in via `proxy.slm.enabled`)
 - Smart routing (local vs API based on sensitivity)
 - Cost analytics per provider
-- GraphQL/gRPC proxy support
-- Custom model fine-tuning
+- More regional detection patterns
 
 ---
 
@@ -608,17 +510,17 @@ Legal     → Ekō → Local LLM (stays on-prem)
 We welcome contributions! Areas where we especially need help:
 
 - **New patterns** for African contexts (formats, regulations, institutions)
-- **Provider integrations** (Cohere, Mistral, etc.)
+- **Provider integrations** (Anthropic, Google, Cohere, Mistral, etc.)
 - **Documentation** (tutorials, use cases, translations)
 - **Testing** (edge cases, performance benchmarks)
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, [SECURITY.md](SECURITY.md) for vulnerability reporting, and [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for package layout.
 
 ---
 
 ## 📜 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
@@ -626,22 +528,19 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 [OpenRay](https://openray.ai) is an open-source AI foundation driving local innovation in Africa. We build tools that make AI safer, more accessible, and contextually relevant for African developers and businesses.
 
-**Other Projects:**
-- Coming soon...
-
 ---
 
 ## 💬 Community & Support
 
 - **GitHub Discussions**: [Ask questions, share ideas](https://github.com/Openray-ai/eko/discussions)
 - **Twitter**: [@OpenRayAI](https://twitter.com/OpenRayAI)
----
 
 ## ⚡ Quick Links
 
 - [🐛 Report a Bug](https://github.com/Openray-ai/eko/issues/new?template=bug_report.md)
 - [💡 Request a Feature](https://github.com/Openray-ai/eko/issues/new?template=feature_request.md)
 - [🎯 Suggest a Pattern](https://github.com/Openray-ai/eko/issues/new?template=pattern_suggestion.md)
+
 ---
 
 <p align="center">
