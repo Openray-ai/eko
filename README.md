@@ -2,6 +2,12 @@
 
 **Ekō** is an open-source, context-aware security proxy that prevents your organization from leaking sensitive data to AI services. It sits between your application and an AI provider, detects sensitive data in prompts, and either redacts or tokenizes that data before it leaves your environment — with first-class detectors for African regulated domains.
 
+<p align="center">
+  <a href="https://ek-playground.openray.workers.dev/"><strong>🎮 Try the live playground →</strong></a>
+</p>
+
+> Paste a prompt, pick redact or anonymize (enable **Advanced** for contextual (SLM) detection), and watch Ekō detect and sanitize it in real time.
+
 ---
 
 ## 🎯 The Problem
@@ -537,6 +543,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## ⚡ Quick Links
 
+- [🎮 Live Playground](https://ek-playground.openray.workers.dev/)
 - [🐛 Report a Bug](https://github.com/Openray-ai/eko/issues/new?template=bug_report.md)
 - [💡 Request a Feature](https://github.com/Openray-ai/eko/issues/new?template=feature_request.md)
 - [🎯 Suggest a Pattern](https://github.com/Openray-ai/eko/issues/new?template=pattern_suggestion.md)
