@@ -13,7 +13,7 @@ Your team wants to use AI for productivity, but every prompt is a potential data
 + Ekō sanitized: "Amina Yusuf can be reached at [REDACTED_PHONE]. Her BVN is [REDACTED_BVN] and the team debugs against [REDACTED_DB_CONNECTION]."
 ```
 
-Regex detection catches structured identifiers (phone, BVN, DB URLs) on its own. Contextual PII such as the person's name is caught when the optional [SLM detector](#-optional-slm-detection-contextual) is enabled.
+Regex detection catches structured identifiers (phone, BVN, DB URLs) on its own. Contextual PII such as the person's name and private address are caught when the optional [SLM detector](#-optional-slm-detection-contextual) is enabled.
 
 ---
 
