@@ -24,13 +24,17 @@ COPY . .
 # ============================================================================
 # Build the binary with optimizations
 # CGO_ENABLED=0: Static binary (no C dependencies, portable across any Linux)
-# GOOS=linux GOARCH=amd64: Target platform
+# TARGETOS / TARGETARCH: auto-populated by Docker Buildx for multi-arch builds.
+#   Defaults (linux/amd64) apply under the classic builder (plain `docker build`
+#   used by the Makefile, local builds, and deploy-gcp.yml), preserving behavior.
 # -ldflags="-s -w": Strip debug info to reduce binary size (~30% reduction)
 #   -s: strip symbol table
 #   -w: strip DWARF debugging info
 # -trimpath: Remove file system paths from binary (security & reproducibility)
 # ============================================================================
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w" \
     -trimpath \
     -o /build/bin/eko \
