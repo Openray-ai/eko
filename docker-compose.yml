@@ -116,7 +116,7 @@ services:
       - PRIVACY_FILTER_ADAPTER_NAME=iamSamurai/privacy-filter-nigeria
       - PRIVACY_FILTER_DEVICE=cpu
       # Hugging Face cache; persist across restarts to avoid re-downloading.
-      - HF_HOME=/root/.cache/huggingface
+      - HF_HOME=/home/eko/.cache/huggingface
       # Optional Hugging Face token. Unauthenticated requests are heavily
       # rate-limited, which can stall the first model download. Put
       # `HF_TOKEN=hf_...` in your local .env (gitignored) or `export` it in
@@ -125,13 +125,13 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       # Make HF download progress visible in `docker logs` / attached output
       # by promoting hub log level and disabling tqdm (which self-suppresses
-      # without a TTY). xet still logs to /root/.cache/huggingface/xet/logs/
+      # without a TTY). xet still logs to /home/eko/.cache/huggingface/xet/logs/
       # because it's a separate Rust binary; tail those for chunk-level detail.
       - HF_HUB_VERBOSITY=info
       - HF_HUB_DISABLE_PROGRESS_BARS=1
 
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - hf-cache:/home/eko/.cache/huggingface
 
     healthcheck:
       test:
