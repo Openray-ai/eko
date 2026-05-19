@@ -4,7 +4,6 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
-    HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_VERBOSITY=warning
 
 # CPU-only torch wheels keep the image small. Override --build-arg TORCH_INDEX
@@ -23,6 +22,14 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 RUN pip install --upgrade pip \
     && pip install --extra-index-url ${TORCH_INDEX} .
+
+RUN useradd --system --create-home --home-dir /home/eko --shell /usr/sbin/nologin eko \
+    && mkdir -p /home/eko/.cache/huggingface \
+    && chown -R eko:eko /home/eko /app
+
+ENV HF_HOME=/home/eko/.cache/huggingface
+
+USER eko
 
 EXPOSE 8000
 
