@@ -83,6 +83,7 @@ func (h *BatchSanitizeHandler) Handle(c *gin.Context) {
 	var req BatchSanitizeRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.limits.MaxBatchBytes)
 	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		if h.metrics != nil {
 			h.metrics.IncErrors()

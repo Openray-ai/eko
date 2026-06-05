@@ -255,7 +255,7 @@ curl -X POST http://localhost:8080/v1/sanitize/batch \
       {
         "id": "prompt-002",
         "prompt": "Email jane@example.com before sending this to the model",
-        "sanitization_mode": "tokenize",
+        "sanitization_mode": "mask",
         "slm": false
       }
     ]

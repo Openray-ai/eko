@@ -99,6 +99,21 @@ func TestBatchSanitizeHandler_EnvelopeValidation(t *testing.T) {
 			body:       `{"items":[{"prompt":"a"}]} {"items":[{"prompt":"b"}]}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "top-level session rejected",
+			body:       `{"session_id":"` + tokenizer.GenerateSessionID() + `","items":[{"prompt":"a"}]}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "top-level mode rejected",
+			body:       `{"sanitization_mode":"tokenize","items":[{"prompt":"a"}]}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "top-level slm rejected",
+			body:       `{"slm":true,"items":[{"prompt":"a"}]}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
