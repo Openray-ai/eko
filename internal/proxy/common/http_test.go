@@ -34,6 +34,55 @@ func TestCopyProviderHeadersGeminiEncodesAndPreservesQuery(t *testing.T) {
 	}
 }
 
+func TestCopyProviderHeadersScopesCredentialsByProvider(t *testing.T) {
+	tests := []struct {
+		name              string
+		provider          ProviderName
+		wantAuthorization bool
+		wantAnthropicKey  bool
+		wantGeminiKey     bool
+	}{
+		{name: "openai", provider: ProviderOpenAI, wantAuthorization: true},
+		{name: "deepseek", provider: ProviderDeepSeek, wantAuthorization: true},
+		{name: "anthropic", provider: ProviderAnthropic, wantAnthropicKey: true},
+		{name: "gemini", provider: ProviderGemini, wantGeminiKey: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream, err := http.NewRequest(http.MethodPost, "https://provider.test/v1", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req := RouteRequest{
+				Query: map[string][]string{
+					"key": {"gemini-query-key"},
+				},
+				Headers: http.Header{
+					"Authorization":     {"Bearer openai-or-deepseek-key"},
+					"X-Api-Key":         {"anthropic-key"},
+					"Anthropic-Version": {"2023-06-01"},
+					"X-Goog-Api-Key":    {"gemini-header-key"},
+				},
+			}
+
+			CopyProviderHeaders(req, upstream, tt.provider)
+
+			if got := upstream.Header.Get("Authorization"); (got != "") != tt.wantAuthorization {
+				t.Fatalf("Authorization forwarded = %t, want %t", got != "", tt.wantAuthorization)
+			}
+			if got := upstream.Header.Get("x-api-key"); (got != "") != tt.wantAnthropicKey {
+				t.Fatalf("x-api-key forwarded = %t, want %t", got != "", tt.wantAnthropicKey)
+			}
+			if got := upstream.Header.Get("x-goog-api-key"); (got != "") != tt.wantGeminiKey {
+				t.Fatalf("x-goog-api-key forwarded = %t, want %t", got != "", tt.wantGeminiKey)
+			}
+			if got := upstream.URL.Query().Get("key"); (got != "") != tt.wantGeminiKey {
+				t.Fatalf("Gemini query key forwarded = %t, want %t", got != "", tt.wantGeminiKey)
+			}
+		})
+	}
+}
+
 func TestResponsesInputTextMessagesRejectsEmptyArrays(t *testing.T) {
 	tests := []string{
 		`[]`,

@@ -60,10 +60,11 @@ func DoJSON(req RouteRequest, provider ProviderConfig, path string, body []byte)
 
 func CopyProviderHeaders(req RouteRequest, upstream *http.Request, provider ProviderName) {
 	upstream.Header.Set("Content-Type", "application/json")
-	if auth := req.Headers.Get("Authorization"); auth != "" {
-		upstream.Header.Set("Authorization", auth)
-	}
 	switch provider {
+	case ProviderOpenAI, ProviderDeepSeek:
+		if auth := req.Headers.Get("Authorization"); auth != "" {
+			upstream.Header.Set("Authorization", auth)
+		}
 	case ProviderAnthropic:
 		if key := req.Headers.Get("x-api-key"); key != "" {
 			upstream.Header.Set("x-api-key", key)

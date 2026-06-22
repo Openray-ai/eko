@@ -278,6 +278,13 @@ func (p *Proxy) sanitizeChatBody(c *gin.Context, body []byte, stream bool, sessi
 		return nil, nil, err
 	}
 	payload["messages"] = encodedMessages
+	if rawTools, ok := payload["tools"]; ok && string(rawTools) != "null" {
+		sanitizedTools, err := sanitizeJSONDescriptionFields(rawTools, sanitize, result)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload["tools"] = sanitizedTools
+	}
 	out, err := json.Marshal(payload)
 	return out, result, err
 }
@@ -357,8 +364,89 @@ func (p *Proxy) sanitizeResponseBody(c *gin.Context, body []byte, stream bool, s
 		return nil, nil, err
 	}
 	payload["input"] = sanitizedInput
+	if rawInstructions, ok := payload["instructions"]; ok && string(rawInstructions) != "null" {
+		sanitizedInstructions, err := p.sanitizeResponseTextField(c, rawInstructions, stream, sessionID, result, "instructions")
+		if err != nil {
+			return nil, nil, err
+		}
+		payload["instructions"] = sanitizedInstructions
+	}
+	if rawTools, ok := payload["tools"]; ok && string(rawTools) != "null" {
+		sanitizedTools, err := sanitizeJSONDescriptionFields(rawTools, p.tokenizingSanitizer(c, stream, sessionID), result)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload["tools"] = sanitizedTools
+	}
 	out, err := json.Marshal(payload)
 	return out, result, err
+}
+
+func sanitizeJSONDescriptionFields(raw json.RawMessage, sanitize sanitizeTextFunc, result *SanitizationResult) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, &common.ProxyError{Status: http.StatusBadRequest, Type: "invalid_request_error", Message: "tools must be valid JSON", Capability: "tools"}
+	}
+	sanitized, err := sanitizeDescriptionValue(value, sanitize, result)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(sanitized)
+}
+
+func sanitizeDescriptionValue(value any, sanitize sanitizeTextFunc, result *SanitizationResult) (any, error) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if key == "description" {
+				text, ok := nested.(string)
+				if !ok {
+					continue
+				}
+				sanitized, violations, redacted, tokenized, err := sanitize(text)
+				if err != nil {
+					return nil, err
+				}
+				typed[key] = sanitized
+				result.AllViolations = append(result.AllViolations, violations...)
+				result.TotalRedacted += redacted
+				result.TotalTokenized += tokenized
+				continue
+			}
+			sanitized, err := sanitizeDescriptionValue(nested, sanitize, result)
+			if err != nil {
+				return nil, err
+			}
+			typed[key] = sanitized
+		}
+		return typed, nil
+	case []any:
+		for i, nested := range typed {
+			sanitized, err := sanitizeDescriptionValue(nested, sanitize, result)
+			if err != nil {
+				return nil, err
+			}
+			typed[i] = sanitized
+		}
+		return typed, nil
+	default:
+		return value, nil
+	}
+}
+
+func (p *Proxy) sanitizeResponseTextField(c *gin.Context, raw json.RawMessage, stream bool, sessionID string, result *SanitizationResult, field string) (json.RawMessage, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return nil, &common.ProxyError{Status: http.StatusBadRequest, Type: "invalid_request_error", Message: fmt.Sprintf("Responses field %q must be a string", field), Capability: "responses_text_field"}
+	}
+	sanitized, violations, redacted, tokenized, err := p.tokenizingSanitizer(c, stream, sessionID)(text)
+	if err != nil {
+		return nil, err
+	}
+	result.AllViolations = append(result.AllViolations, violations...)
+	result.TotalRedacted += redacted
+	result.TotalTokenized += tokenized
+	return json.Marshal(sanitized)
 }
 
 func (p *Proxy) sanitizeResponseInput(c *gin.Context, input json.RawMessage, stream bool, sessionID string, provider common.ProviderName) (json.RawMessage, *SanitizationResult, error) {

@@ -134,6 +134,7 @@ func TestProxyPreservesOpenAICompatibleChatMessageFields(t *testing.T) {
 
 	body := `{
 		"model":"gpt-4o",
+		"tools":[{"type":"function","function":{"name":"lookup","description":"email tooldef@example.com","parameters":{"type":"object","properties":{"account":{"type":"string","description":"email param@example.com"}}}}}],
 		"messages":[
 			{"role":"user","name":"alice","content":"email secret@example.com"},
 			{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"email\":\"tool@example.com\"}"}}]},
@@ -150,7 +151,7 @@ func TestProxyPreservesOpenAICompatibleChatMessageFields(t *testing.T) {
 			t.Fatalf("expected upstream body to preserve %s, got %s", want, upstream)
 		}
 	}
-	for _, leaked := range []string{"secret@example.com", "tool@example.com"} {
+	for _, leaked := range []string{"secret@example.com", "tool@example.com", "tooldef@example.com", "param@example.com"} {
 		if strings.Contains(upstream, leaked) {
 			t.Fatalf("expected chat text fields to be sanitized, got %s", upstream)
 		}
@@ -260,7 +261,7 @@ func TestProxyPreservesOpenAIResponsesNonTextBlocks(t *testing.T) {
 	engine := gin.New()
 	engine.POST("/v1/responses", proxy.HandleResponse)
 
-	rec := performRequest(engine, "/v1/responses", `{"model":"gpt-4.1","input":[{"role":"user","id":"msg_1","content":[{"type":"input_text","text":"email secret@example.com","annotations":[{"type":"note","text":"keep"}]},{"type":"input_image","image_url":"https://example.com/image.jpg","detail":"high"},{"type":"input_file","file_id":"file_123"}]}]}`)
+	rec := performRequest(engine, "/v1/responses", `{"model":"gpt-4.1","instructions":"email instructions@example.com","tools":[{"type":"function","name":"lookup","description":"email response-tool@example.com","parameters":{"type":"object","properties":{"account":{"type":"string","description":"email response-param@example.com"}}}}],"input":[{"role":"user","id":"msg_1","content":[{"type":"input_text","text":"email secret@example.com","annotations":[{"type":"note","text":"keep"}]},{"type":"input_image","image_url":"https://example.com/image.jpg","detail":"high"},{"type":"input_file","file_id":"file_123"}]}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -270,8 +271,10 @@ func TestProxyPreservesOpenAIResponsesNonTextBlocks(t *testing.T) {
 			t.Fatalf("expected OpenAI upstream body to preserve %s, got %s", want, upstream)
 		}
 	}
-	if strings.Contains(upstream, "secret@example.com") {
-		t.Fatalf("expected input_text to be sanitized, got %s", upstream)
+	for _, leaked := range []string{"secret@example.com", "instructions@example.com", "response-tool@example.com", "response-param@example.com"} {
+		if strings.Contains(upstream, leaked) {
+			t.Fatalf("expected Responses text fields to be sanitized, got %s", upstream)
+		}
 	}
 }
 
