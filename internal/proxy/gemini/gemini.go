@@ -1,8 +1,9 @@
-package anthropic
+package gemini
 
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ type Adapter struct {
 func New(baseURL string, timeout int) *Adapter {
 	return &Adapter{
 		provider: common.ProviderConfig{
-			Name:    common.ProviderAnthropic,
+			Name:    common.ProviderGemini,
 			BaseURL: baseURL,
 			Timeout: timeout,
 		},
@@ -24,7 +25,7 @@ func New(baseURL string, timeout int) *Adapter {
 }
 
 func (a *Adapter) Name() common.ProviderName {
-	return common.ProviderAnthropic
+	return common.ProviderGemini
 }
 
 func (a *Adapter) Capabilities() common.Capabilities {
@@ -38,13 +39,13 @@ func (a *Adapter) Capabilities() common.Capabilities {
 
 func (a *Adapter) ChatCompletions(req common.RouteRequest) (*common.RouteResponse, error) {
 	if req.Stream {
-		return nil, common.Unsupported(common.ProviderAnthropic, req.Route, req.Model, "chat_streaming", "streaming normalization is not supported for Anthropic")
+		return nil, common.Unsupported(common.ProviderGemini, req.Route, req.Model, "chat_streaming", "streaming normalization is not supported for Gemini")
 	}
-	body, err := chatToMessages(req.Body)
+	body, err := chatToGenerateContent(req.Body)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := common.ForwardJSON(req, a.provider, "/messages", body)
+	resp, err := common.ForwardJSON(req, a.provider, generateContentPath(req.Model), body)
 	if err != nil || resp.StatusCode >= 400 {
 		return resp, err
 	}
@@ -54,13 +55,13 @@ func (a *Adapter) ChatCompletions(req common.RouteRequest) (*common.RouteRespons
 
 func (a *Adapter) Responses(req common.RouteRequest) (*common.RouteResponse, error) {
 	if req.Stream {
-		return nil, common.Unsupported(common.ProviderAnthropic, req.Route, req.Model, "responses_streaming", "streaming responses normalization is not supported for Anthropic")
+		return nil, common.Unsupported(common.ProviderGemini, req.Route, req.Model, "responses_streaming", "streaming responses normalization is not supported for Gemini")
 	}
-	body, err := responseToMessages(req.Body)
+	body, err := responseToGenerateContent(req.Body)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := common.ForwardJSON(req, a.provider, "/messages", body)
+	resp, err := common.ForwardJSON(req, a.provider, generateContentPath(req.Model), body)
 	if err != nil || resp.StatusCode >= 400 {
 		return resp, err
 	}
@@ -71,7 +72,6 @@ func (a *Adapter) Responses(req common.RouteRequest) (*common.RouteResponse, err
 type chatRequest struct {
 	Model       string    `json:"model"`
 	Messages    []message `json:"messages"`
-	Stream      bool      `json:"stream,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
 	MaxTokens   *int      `json:"max_tokens,omitempty"`
 	TopP        *float64  `json:"top_p,omitempty"`
@@ -79,6 +79,7 @@ type chatRequest struct {
 	ToolChoice  any       `json:"tool_choice,omitempty"`
 	ResponseFmt any       `json:"response_format,omitempty"`
 	LogitBias   any       `json:"logit_bias,omitempty"`
+	Stop        any       `json:"stop,omitempty"`
 }
 
 type message struct {
@@ -86,25 +87,25 @@ type message struct {
 	Content string `json:"content"`
 }
 
-func chatToMessages(body []byte) ([]byte, error) {
-	if err := common.RejectUnsupportedTopLevelFields(body, anthropicChatFields, common.ProviderAnthropic, "/v1/chat/completions", "anthropic_chat_translation"); err != nil {
+func chatToGenerateContent(body []byte) ([]byte, error) {
+	if err := common.RejectUnsupportedTopLevelFields(body, geminiChatFields, common.ProviderGemini, "/v1/chat/completions", "gemini_chat_translation"); err != nil {
 		return nil, err
 	}
-	if err := rejectUnsupportedMessageFields(body, common.ProviderAnthropic, "anthropic_chat_translation"); err != nil {
+	if err := rejectUnsupportedMessageFields(body); err != nil {
 		return nil, err
 	}
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, err
 	}
-	if req.Tools != nil || req.ToolChoice != nil || req.ResponseFmt != nil || req.LogitBias != nil {
-		return nil, common.Unsupported(common.ProviderAnthropic, "/v1/chat/completions", req.Model, "anthropic_chat_translation", "Anthropic adapter does not support tools, response_format, or logit_bias yet")
+	if req.Tools != nil || req.ToolChoice != nil || req.ResponseFmt != nil || req.LogitBias != nil || req.Stop != nil {
+		return nil, common.Unsupported(common.ProviderGemini, "/v1/chat/completions", req.Model, "gemini_chat_translation", "Gemini adapter does not support tools, response_format, logit_bias, or stop yet")
 	}
-	return buildMessages(req.Model, req.Messages, req.MaxTokens, req.Temperature, req.TopP)
+	return buildGenerateContent(req.Messages, req.MaxTokens, req.Temperature, req.TopP)
 }
 
-func responseToMessages(body []byte) ([]byte, error) {
-	if err := common.RejectUnsupportedTopLevelFields(body, anthropicResponseFields, common.ProviderAnthropic, "/v1/responses", "responses_advanced_fields"); err != nil {
+func responseToGenerateContent(body []byte) ([]byte, error) {
+	if err := common.RejectUnsupportedTopLevelFields(body, geminiResponseFields, common.ProviderGemini, "/v1/responses", "responses_advanced_fields"); err != nil {
 		return nil, err
 	}
 	var req struct {
@@ -126,16 +127,20 @@ func responseToMessages(body []byte) ([]byte, error) {
 		return nil, err
 	}
 	if req.Tools != nil || req.ToolChoice != nil || req.ParallelToolCalls != nil || req.PreviousResponseID != "" || req.Instructions != "" || req.Store != nil || req.Metadata != nil || req.User != "" {
-		return nil, common.Unsupported(common.ProviderAnthropic, "/v1/responses", req.Model, "responses_advanced_fields", "Anthropic Responses adapter supports only text input and basic generation options")
+		return nil, common.Unsupported(common.ProviderGemini, "/v1/responses", req.Model, "responses_advanced_fields", "Gemini Responses adapter supports only text input and basic generation options")
 	}
 	messages, err := responseInputMessages(req.Input, req.Model)
 	if err != nil {
 		return nil, err
 	}
-	return buildMessages(req.Model, messages, req.MaxOutputTokens, req.Temperature, req.TopP)
+	return buildGenerateContent(messages, req.MaxOutputTokens, req.Temperature, req.TopP)
 }
 
-func rejectUnsupportedMessageFields(body []byte, provider common.ProviderName, capability string) error {
+func generateContentPath(model string) string {
+	return fmt.Sprintf("/models/%s:generateContent", url.PathEscape(model))
+}
+
+func rejectUnsupportedMessageFields(body []byte) error {
 	var raw struct {
 		Model    string                       `json:"model"`
 		Messages []map[string]json.RawMessage `json:"messages"`
@@ -150,14 +155,14 @@ func rejectUnsupportedMessageFields(body []byte, provider common.ProviderName, c
 	for _, msg := range raw.Messages {
 		for field := range msg {
 			if _, ok := allowed[field]; !ok {
-				return common.Unsupported(provider, "/v1/chat/completions", raw.Model, capability, fmt.Sprintf("%s adapter does not support message field %q", provider, field))
+				return common.Unsupported(common.ProviderGemini, "/v1/chat/completions", raw.Model, "gemini_chat_translation", fmt.Sprintf("Gemini adapter does not support message field %q", field))
 			}
 		}
 	}
 	return nil
 }
 
-var anthropicChatFields = map[string]struct{}{
+var geminiChatFields = map[string]struct{}{
 	"model":           {},
 	"messages":        {},
 	"stream":          {},
@@ -168,9 +173,10 @@ var anthropicChatFields = map[string]struct{}{
 	"tool_choice":     {},
 	"response_format": {},
 	"logit_bias":      {},
+	"stop":            {},
 }
 
-var anthropicResponseFields = map[string]struct{}{
+var geminiResponseFields = map[string]struct{}{
 	"model":                {},
 	"input":                {},
 	"stream":               {},
@@ -187,46 +193,50 @@ var anthropicResponseFields = map[string]struct{}{
 	"user":                 {},
 }
 
-func buildMessages(model string, messages []message, maxTokens *int, temperature, topP *float64) ([]byte, error) {
-	system := []string{}
-	outMessages := []map[string]any{}
+func buildGenerateContent(messages []message, maxTokens *int, temperature, topP *float64) ([]byte, error) {
+	systemParts := []map[string]string{}
+	contents := []map[string]any{}
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
 			if msg.Content != "" {
-				system = append(system, msg.Content)
+				systemParts = append(systemParts, map[string]string{"text": msg.Content})
 			}
 		case "user", "assistant":
-			outMessages = append(outMessages, map[string]any{
-				"role": msg.Role,
-				"content": []map[string]string{{
-					"type": "text",
-					"text": msg.Content,
-				}},
+			role := "user"
+			if msg.Role == "assistant" {
+				role = "model"
+			}
+			contents = append(contents, map[string]any{
+				"role":  role,
+				"parts": []map[string]string{{"text": msg.Content}},
 			})
 		default:
-			return nil, common.Unsupported(common.ProviderAnthropic, "/v1/chat/completions", model, "anthropic_roles", "Anthropic adapter supports only system, user, and assistant roles")
+			return nil, common.Unsupported(common.ProviderGemini, "/v1/chat/completions", "", "gemini_roles", "Gemini adapter supports only system, user, and assistant roles")
 		}
 	}
-	out := map[string]any{
-		"model":      model,
-		"messages":   outMessages,
-		"max_tokens": firstInt(maxTokens, 1024),
+	out := map[string]any{"contents": contents}
+	if len(systemParts) > 0 {
+		out["systemInstruction"] = map[string]any{"parts": systemParts}
 	}
-	if len(system) > 0 {
-		out["system"] = strings.Join(system, "\n")
-	}
-	if temperature != nil {
-		out["temperature"] = *temperature
-	}
-	if topP != nil {
-		out["top_p"] = *topP
+	if maxTokens != nil || temperature != nil || topP != nil {
+		gen := map[string]any{}
+		if maxTokens != nil {
+			gen["maxOutputTokens"] = *maxTokens
+		}
+		if temperature != nil {
+			gen["temperature"] = *temperature
+		}
+		if topP != nil {
+			gen["topP"] = *topP
+		}
+		out["generationConfig"] = gen
 	}
 	return json.Marshal(out)
 }
 
 func responseInputMessages(raw json.RawMessage, model string) ([]message, error) {
-	input, err := common.ResponsesInputTextMessages(raw, common.ProviderAnthropic, model)
+	input, err := common.ResponsesInputTextMessages(raw, common.ProviderGemini, model)
 	if err != nil {
 		return nil, err
 	}
@@ -283,29 +293,27 @@ func normalizeResponse(model string, body []byte) ([]byte, error) {
 
 func textFromResponse(body []byte) (string, error) {
 	var resp struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return "", err
 	}
 	parts := []string{}
-	for _, block := range resp.Content {
-		if block.Type == "text" && block.Text != "" {
-			parts = append(parts, block.Text)
+	for _, candidate := range resp.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" {
+				parts = append(parts, part.Text)
+			}
 		}
 	}
 	if len(parts) == 0 {
-		return "", fmt.Errorf("Anthropic response did not contain text content")
+		return "", fmt.Errorf("Gemini response did not contain text content")
 	}
 	return strings.Join(parts, "\n"), nil
-}
-
-func firstInt(v *int, fallback int) int {
-	if v == nil {
-		return fallback
-	}
-	return *v
 }

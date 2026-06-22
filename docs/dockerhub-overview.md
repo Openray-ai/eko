@@ -49,7 +49,7 @@ curl -X POST http://localhost:8080/v1/sanitize \
 
 ---
 
-## 🔌 OpenAI-compatible proxy
+## 🔌 OpenAI-compatible multi-provider proxy
 
 Point the OpenAI SDK at Ekō — only the base URL changes:
 
@@ -57,7 +57,7 @@ Point the OpenAI SDK at Ekō — only the base URL changes:
 export OPENAI_BASE_URL="http://localhost:8080/v1"
 ```
 
-Routes: `POST /v1/chat/completions`, `POST /v1/responses`, plus the core `POST /v1/sanitize`. Ekō forwards the **sanitized** request to the configured upstream.
+Routes: `POST /v1/chat/completions`, `POST /v1/responses`, plus the core `POST /v1/sanitize`. Ekō forwards the **sanitized** request to the upstream selected by model routing, with built-in support for OpenAI, Anthropic, Gemini, and DeepSeek model families.
 
 ---
 

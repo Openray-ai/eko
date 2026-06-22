@@ -2,8 +2,10 @@ package config
 
 import (
 	"eko/internal/helpers/logger"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 )
@@ -40,13 +42,16 @@ type LoggingConfig struct {
 
 // ProxyConfig holds proxy configuration for all providers
 type ProxyConfig struct {
-	OpenAI    ProviderConfig `yaml:"openai"`
-	Anthropic ProviderConfig `yaml:"anthropic"`
-	Google    ProviderConfig `yaml:"google"`
-	Behavior  BehaviorConfig `yaml:"behavior"`
-	Redis     RedisConfig    `yaml:"redis"`
-	Crypto    CryptoConfig   `yaml:"crypto"`
-	SLM       SLMConfig      `yaml:"slm"`
+	OpenAI       ProviderConfig     `yaml:"openai"`
+	Anthropic    ProviderConfig     `yaml:"anthropic"`
+	Google       ProviderConfig     `yaml:"google"`
+	Gemini       ProviderConfig     `yaml:"gemini"`
+	DeepSeek     ProviderConfig     `yaml:"deepseek"`
+	ModelRouting ModelRoutingConfig `yaml:"model_routing"`
+	Behavior     BehaviorConfig     `yaml:"behavior"`
+	Redis        RedisConfig        `yaml:"redis"`
+	Crypto       CryptoConfig       `yaml:"crypto"`
+	SLM          SLMConfig          `yaml:"slm"`
 }
 
 // SLMConfig configures the optional Small Language Model contextual detector.
@@ -79,6 +84,36 @@ type ProviderConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	BaseURL string `yaml:"base_url"`
 	Timeout int    `yaml:"timeout"`
+
+	configured bool
+	enabledSet bool
+	baseURLSet bool
+	timeoutSet bool
+}
+
+func (cfg *ProviderConfig) UnmarshalYAML(data []byte) error {
+	type providerConfig ProviderConfig
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var out providerConfig
+	if err := yaml.Unmarshal(data, &out); err != nil {
+		return err
+	}
+	*cfg = ProviderConfig(out)
+	cfg.configured = true
+	_, cfg.enabledSet = raw["enabled"]
+	_, cfg.baseURLSet = raw["base_url"]
+	_, cfg.timeoutSet = raw["timeout"]
+	return nil
+}
+
+// ModelRoutingConfig maps public OpenAI-compatible model names to upstream providers.
+type ModelRoutingConfig struct {
+	DefaultProvider string            `yaml:"default_provider"`
+	Models          map[string]string `yaml:"models"`
+	Prefixes        map[string]string `yaml:"prefixes"`
 }
 
 // BehaviorConfig defines how the proxy behaves on violations
@@ -187,6 +222,9 @@ func Load(filename string) (*Config, error) {
 	if err := validateBehaviorConfig(config.Proxy.Behavior); err != nil {
 		return nil, fmt.Errorf("invalid behavior config: %w", err)
 	}
+	if err := validateProxyConfig(config.Proxy); err != nil {
+		return nil, fmt.Errorf("invalid proxy config: %w", err)
+	}
 	if err := validateSLMConfig(config.Proxy.SLM); err != nil {
 		return nil, fmt.Errorf("invalid slm config: %w", err)
 	}
@@ -221,6 +259,27 @@ func Default() *Config {
 				Enabled: true,
 				BaseURL: "https://generativelanguage.googleapis.com/v1",
 				Timeout: 30,
+			},
+			Gemini: ProviderConfig{
+				Enabled: true,
+				BaseURL: "https://generativelanguage.googleapis.com/v1",
+				Timeout: 30,
+			},
+			DeepSeek: ProviderConfig{
+				Enabled: true,
+				BaseURL: "https://api.deepseek.com/v1",
+				Timeout: 30,
+			},
+			ModelRouting: ModelRoutingConfig{
+				DefaultProvider: "openai",
+				Models:          map[string]string{},
+				Prefixes: map[string]string{
+					"gpt-":      "openai",
+					"o":         "openai",
+					"claude-":   "anthropic",
+					"gemini-":   "gemini",
+					"deepseek-": "deepseek",
+				},
 			},
 			Behavior: BehaviorConfig{
 				OnViolation:         "sanitize",
@@ -279,6 +338,15 @@ func applyBehaviorDefaults(cfg *BehaviorConfig) {
 }
 
 func applyProxyDefaults(cfg *ProxyConfig) {
+	if !cfg.Gemini.configured && cfg.Google.configured {
+		cfg.Gemini = cfg.Google
+	}
+	applyProviderDefault(&cfg.OpenAI, "https://api.openai.com/v1", 30)
+	applyProviderDefault(&cfg.Anthropic, "https://api.anthropic.com/v1", 30)
+	applyProviderDefault(&cfg.Google, "https://generativelanguage.googleapis.com/v1", 30)
+	applyProviderDefault(&cfg.Gemini, "https://generativelanguage.googleapis.com/v1", 30)
+	applyProviderDefault(&cfg.DeepSeek, "https://api.deepseek.com/v1", 30)
+	applyModelRoutingDefaults(&cfg.ModelRouting, *cfg)
 	if cfg.Redis.KeyPrefix == "" {
 		cfg.Redis.KeyPrefix = "eko:"
 	}
@@ -302,6 +370,68 @@ func applyProxyDefaults(cfg *ProxyConfig) {
 	}
 	if cfg.Crypto.VaultTransit.TimeoutMs == 0 {
 		cfg.Crypto.VaultTransit.TimeoutMs = 2000
+	}
+}
+
+func isProviderZero(cfg ProviderConfig) bool {
+	return !cfg.configured && !cfg.Enabled && cfg.BaseURL == "" && cfg.Timeout == 0
+}
+
+func applyProviderDefault(cfg *ProviderConfig, baseURL string, timeout int) {
+	if !cfg.configured || !cfg.enabledSet {
+		cfg.Enabled = true
+	}
+	if cfg.BaseURL == "" && (!cfg.configured || !cfg.baseURLSet) {
+		cfg.BaseURL = baseURL
+	}
+	if cfg.Timeout == 0 && (!cfg.configured || !cfg.timeoutSet) {
+		cfg.Timeout = timeout
+	}
+}
+
+func applyModelRoutingDefaults(cfg *ModelRoutingConfig, proxy ProxyConfig) {
+	if cfg.DefaultProvider == "" {
+		cfg.DefaultProvider = defaultProvider(proxy)
+	}
+	if cfg.Models == nil {
+		cfg.Models = map[string]string{}
+	}
+	if cfg.Prefixes == nil {
+		cfg.Prefixes = map[string]string{}
+	}
+	defaults := map[string]string{}
+	if proxy.OpenAI.Enabled {
+		defaults["gpt-"] = "openai"
+		defaults["o"] = "openai"
+	}
+	if proxy.Anthropic.Enabled {
+		defaults["claude-"] = "anthropic"
+	}
+	if proxy.Gemini.Enabled {
+		defaults["gemini-"] = "gemini"
+	}
+	if proxy.DeepSeek.Enabled {
+		defaults["deepseek-"] = "deepseek"
+	}
+	for prefix, provider := range defaults {
+		if _, ok := cfg.Prefixes[prefix]; !ok {
+			cfg.Prefixes[prefix] = provider
+		}
+	}
+}
+
+func defaultProvider(proxy ProxyConfig) string {
+	switch {
+	case proxy.OpenAI.Enabled:
+		return "openai"
+	case proxy.Anthropic.Enabled:
+		return "anthropic"
+	case proxy.Gemini.Enabled:
+		return "gemini"
+	case proxy.DeepSeek.Enabled:
+		return "deepseek"
+	default:
+		return ""
 	}
 }
 
@@ -369,18 +499,87 @@ func validateBehaviorConfig(cfg BehaviorConfig) error {
 	return nil
 }
 
+func validateProxyConfig(cfg ProxyConfig) error {
+	providers := map[string]ProviderConfig{
+		"openai":    cfg.OpenAI,
+		"anthropic": cfg.Anthropic,
+		"google":    cfg.Google,
+		"gemini":    cfg.Gemini,
+		"deepseek":  cfg.DeepSeek,
+	}
+	for name, provider := range providers {
+		if provider.Timeout <= 0 {
+			return fmt.Errorf("%s.timeout must be > 0", name)
+		}
+		if provider.Enabled && strings.TrimSpace(provider.BaseURL) == "" {
+			return fmt.Errorf("%s.base_url is required when enabled", name)
+		}
+	}
+	if cfg.ModelRouting.DefaultProvider == "" {
+		return fmt.Errorf("at least one proxy provider must be enabled")
+	}
+	if err := validateProviderRoute("model_routing.default_provider", cfg.ModelRouting.DefaultProvider, providers); err != nil {
+		return err
+	}
+	for model, provider := range cfg.ModelRouting.Models {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("model_routing.models contains an empty model")
+		}
+		if err := validateProviderRoute(fmt.Sprintf("model_routing.models[%q]", model), provider, providers); err != nil {
+			return err
+		}
+	}
+	for prefix, provider := range cfg.ModelRouting.Prefixes {
+		if strings.TrimSpace(prefix) == "" {
+			return fmt.Errorf("model_routing.prefixes contains an empty prefix")
+		}
+		if err := validateProviderRoute(fmt.Sprintf("model_routing.prefixes[%q]", prefix), provider, providers); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProviderRoute(field, provider string, providers map[string]ProviderConfig) error {
+	if provider == "google" {
+		provider = "gemini"
+	}
+	cfg, ok := providers[provider]
+	if !ok {
+		return fmt.Errorf("%s references unknown provider %q", field, provider)
+	}
+	if !cfg.Enabled {
+		return fmt.Errorf("%s references disabled provider %q", field, provider)
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return fmt.Errorf("%s references provider %q without base_url", field, provider)
+	}
+	return nil
+}
+
 func LoadConfig() *Config {
 	configPath := os.Getenv("EKO_CONFIG")
-	if configPath == "" {
+	explicitPath := configPath != ""
+	if !explicitPath {
 		configPath = "configs/config.yaml"
 	}
+	return loadConfigFromPath(configPath, !explicitPath, os.Exit)
+}
 
+func loadConfigFromPath(configPath string, allowMissingDefault bool, exit func(int)) *Config {
 	cfg, err := Load(configPath)
 	if err != nil {
-		// Use fmt here since logger isn't initialized yet
-		fmt.Printf("Failed to load config from %s: %v\n", configPath, err)
-		fmt.Println("Using default configuration")
-		cfg = Default()
+		if allowMissingDefault && errors.Is(err, os.ErrNotExist) {
+			// Use fmt here since logger isn't initialized yet.
+			fmt.Printf("Failed to load config from %s: %v\n", configPath, err)
+			fmt.Println("Using default configuration")
+			cfg := Default()
+			applyEnvOverrides(cfg)
+			return cfg
+		}
+		fmt.Fprintf(os.Stderr, "Failed to load config from %s: %v\n", configPath, err)
+		exit(1)
+		return nil
 	}
 
 	applyEnvOverrides(cfg)
