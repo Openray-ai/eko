@@ -91,6 +91,10 @@ type BehaviorConfig struct {
 	TokenTTLms          int    `yaml:"token_ttl_ms"`
 	MaxVaults           int    `yaml:"max_vaults"`
 	MaxTokensPerVault   int    `yaml:"max_tokens_per_vault"`
+	MaxBatchItems       int    `yaml:"max_batch_items"`
+	MaxPromptBytes      int    `yaml:"max_prompt_bytes"`
+	MaxBatchBytes       int    `yaml:"max_batch_bytes"`
+	MaxBatchConcurrency int    `yaml:"max_batch_concurrency"`
 }
 
 type RedisConfig struct {
@@ -231,6 +235,10 @@ func Default() *Config {
 				TokenTTLms:          30000,
 				MaxVaults:           10000,
 				MaxTokensPerVault:   100000,
+				MaxBatchItems:       100,
+				MaxPromptBytes:      65536,
+				MaxBatchBytes:       1048576,
+				MaxBatchConcurrency: 1,
 			},
 			Redis: RedisConfig{
 				KeyPrefix:      "eko:",
@@ -275,6 +283,18 @@ func applyBehaviorDefaults(cfg *BehaviorConfig) {
 	}
 	if cfg.MaxTokensPerVault == 0 {
 		cfg.MaxTokensPerVault = 100000
+	}
+	if cfg.MaxBatchItems == 0 {
+		cfg.MaxBatchItems = 100
+	}
+	if cfg.MaxPromptBytes == 0 {
+		cfg.MaxPromptBytes = 65536
+	}
+	if cfg.MaxBatchBytes == 0 {
+		cfg.MaxBatchBytes = 1048576
+	}
+	if cfg.MaxBatchConcurrency == 0 {
+		cfg.MaxBatchConcurrency = 1
 	}
 }
 
@@ -365,6 +385,18 @@ func validateBehaviorConfig(cfg BehaviorConfig) error {
 	}
 	if cfg.MaxTokensPerVault <= 0 {
 		return fmt.Errorf("max_tokens_per_vault must be > 0")
+	}
+	if cfg.MaxBatchItems <= 0 {
+		return fmt.Errorf("max_batch_items must be > 0")
+	}
+	if cfg.MaxPromptBytes <= 0 {
+		return fmt.Errorf("max_prompt_bytes must be > 0")
+	}
+	if cfg.MaxBatchBytes <= 0 {
+		return fmt.Errorf("max_batch_bytes must be > 0")
+	}
+	if cfg.MaxBatchConcurrency <= 0 {
+		return fmt.Errorf("max_batch_concurrency must be > 0")
 	}
 	return nil
 }

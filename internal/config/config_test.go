@@ -60,6 +60,18 @@ func TestLoadBehaviorConfig(t *testing.T) {
 			if cfg.Proxy.Behavior.TokenTTLms != tt.wantTTL {
 				t.Fatalf("token_ttl_ms = %d, want %d", cfg.Proxy.Behavior.TokenTTLms, tt.wantTTL)
 			}
+			if cfg.Proxy.Behavior.MaxBatchItems != 100 {
+				t.Fatalf("max_batch_items = %d, want %d", cfg.Proxy.Behavior.MaxBatchItems, 100)
+			}
+			if cfg.Proxy.Behavior.MaxPromptBytes != 65536 {
+				t.Fatalf("max_prompt_bytes = %d, want %d", cfg.Proxy.Behavior.MaxPromptBytes, 65536)
+			}
+			if cfg.Proxy.Behavior.MaxBatchBytes != 1048576 {
+				t.Fatalf("max_batch_bytes = %d, want %d", cfg.Proxy.Behavior.MaxBatchBytes, 1048576)
+			}
+			if cfg.Proxy.Behavior.MaxBatchConcurrency != 1 {
+				t.Fatalf("max_batch_concurrency = %d, want %d", cfg.Proxy.Behavior.MaxBatchConcurrency, 1)
+			}
 		})
 	}
 }
@@ -75,6 +87,18 @@ func TestDefaultBehaviorConfig(t *testing.T) {
 	}
 	if cfg.Proxy.Behavior.TokenStoreBackend != "memory" {
 		t.Fatalf("token_store_backend = %q, want %q", cfg.Proxy.Behavior.TokenStoreBackend, "memory")
+	}
+	if cfg.Proxy.Behavior.MaxBatchItems != 100 {
+		t.Fatalf("max_batch_items = %d, want %d", cfg.Proxy.Behavior.MaxBatchItems, 100)
+	}
+	if cfg.Proxy.Behavior.MaxPromptBytes != 65536 {
+		t.Fatalf("max_prompt_bytes = %d, want %d", cfg.Proxy.Behavior.MaxPromptBytes, 65536)
+	}
+	if cfg.Proxy.Behavior.MaxBatchBytes != 1048576 {
+		t.Fatalf("max_batch_bytes = %d, want %d", cfg.Proxy.Behavior.MaxBatchBytes, 1048576)
+	}
+	if cfg.Proxy.Behavior.MaxBatchConcurrency != 1 {
+		t.Fatalf("max_batch_concurrency = %d, want %d", cfg.Proxy.Behavior.MaxBatchConcurrency, 1)
 	}
 	if cfg.Proxy.Redis.MetaSuffix != "vault_meta:" {
 		t.Fatalf("meta_suffix = %q, want %q", cfg.Proxy.Redis.MetaSuffix, "vault_meta:")
@@ -99,6 +123,54 @@ func TestLoadBehaviorConfig_InvalidBackend(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected invalid backend to fail")
+	}
+}
+
+func TestLoadBehaviorConfig_BatchLimitOverrides(t *testing.T) {
+	path := writeTempConfig(t, `proxy:
+  behavior:
+    max_batch_items: 7
+    max_prompt_bytes: 128
+    max_batch_bytes: 2048
+    max_batch_concurrency: 2
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Proxy.Behavior.MaxBatchItems != 7 {
+		t.Fatalf("max_batch_items = %d, want %d", cfg.Proxy.Behavior.MaxBatchItems, 7)
+	}
+	if cfg.Proxy.Behavior.MaxPromptBytes != 128 {
+		t.Fatalf("max_prompt_bytes = %d, want %d", cfg.Proxy.Behavior.MaxPromptBytes, 128)
+	}
+	if cfg.Proxy.Behavior.MaxBatchBytes != 2048 {
+		t.Fatalf("max_batch_bytes = %d, want %d", cfg.Proxy.Behavior.MaxBatchBytes, 2048)
+	}
+	if cfg.Proxy.Behavior.MaxBatchConcurrency != 2 {
+		t.Fatalf("max_batch_concurrency = %d, want %d", cfg.Proxy.Behavior.MaxBatchConcurrency, 2)
+	}
+}
+
+func TestLoadBehaviorConfig_InvalidBatchLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"invalid max_batch_items", "proxy:\n  behavior:\n    max_batch_items: -1\n"},
+		{"invalid max_prompt_bytes", "proxy:\n  behavior:\n    max_prompt_bytes: -1\n"},
+		{"invalid max_batch_bytes", "proxy:\n  behavior:\n    max_batch_bytes: -1\n"},
+		{"invalid max_batch_concurrency", "proxy:\n  behavior:\n    max_batch_concurrency: -1\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfig(t, tt.yaml)
+			if _, err := Load(path); err == nil {
+				t.Fatal("expected invalid batch limit to fail")
+			}
+		})
 	}
 }
 
