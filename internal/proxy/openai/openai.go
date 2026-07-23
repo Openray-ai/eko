@@ -173,6 +173,25 @@ func (p *Proxy) HandleChatCompletion(c *gin.Context) {
 
 	// Replace original messages with sanitized ones
 	req.Messages = sanitizationResult.SanitizedMessages
+	if req.Tools != nil {
+		sanitizedTools, violations, redacted, tokenized, err := p.sanitizeToolDescriptions(c.Request.Context(), req.Tools, req.Stream, sessionID)
+		if err != nil {
+			logger.Error("Sanitization failed", logger.Fields{
+				"error": err.Error(),
+			})
+			c.JSON(statusCodeForSanitizationError(err), gin.H{
+				"error": map[string]any{
+					"message": "Failed to sanitize request",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
+		req.Tools = sanitizedTools
+		sanitizationResult.AllViolations = append(sanitizationResult.AllViolations, violations...)
+		sanitizationResult.TotalRedacted += redacted
+		sanitizationResult.TotalTokenized += tokenized
+	}
 
 	// Handle streaming vs non-streaming
 	if req.Stream {
@@ -476,6 +495,44 @@ func (p *Proxy) HandleResponse(c *gin.Context) {
 
 	// Replace original input with sanitized version
 	req.Input = sanitizationResult.SanitizedInput
+	if req.Instructions != "" {
+		sanitized, violations, redacted, tokenized, err := p.sanitizeResponseText(c.Request.Context(), req.Instructions, req.Stream, sessionID)
+		if err != nil {
+			logger.Error("Sanitization failed", logger.Fields{
+				"error": err.Error(),
+			})
+			c.JSON(statusCodeForSanitizationError(err), gin.H{
+				"error": map[string]any{
+					"message": "Failed to sanitize request",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
+		req.Instructions = sanitized
+		sanitizationResult.AllViolations = append(sanitizationResult.AllViolations, violations...)
+		sanitizationResult.TotalRedacted += redacted
+		sanitizationResult.TotalTokenized += tokenized
+	}
+	if req.Tools != nil {
+		sanitizedTools, violations, redacted, tokenized, err := p.sanitizeToolDescriptions(c.Request.Context(), req.Tools, req.Stream, sessionID)
+		if err != nil {
+			logger.Error("Sanitization failed", logger.Fields{
+				"error": err.Error(),
+			})
+			c.JSON(statusCodeForSanitizationError(err), gin.H{
+				"error": map[string]any{
+					"message": "Failed to sanitize request",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
+		req.Tools = sanitizedTools
+		sanitizationResult.AllViolations = append(sanitizationResult.AllViolations, violations...)
+		sanitizationResult.TotalRedacted += redacted
+		sanitizationResult.TotalTokenized += tokenized
+	}
 
 	// Handle streaming vs non-streaming
 	if req.Stream {
@@ -672,6 +729,79 @@ func (p *Proxy) sanitizeResponseInputRedact(inputRaw json.RawMessage) (*Response
 
 		return result.SanitizedPrompt, result.Violations, result.RedactedCount, 0, nil
 	}, false)
+}
+
+func (p *Proxy) sanitizeResponseText(ctx context.Context, text string, stream bool, sessionID string) (string, []detector.Violation, int, int, error) {
+	if stream {
+		result, err := p.GetSanitizer().SanitizeRedactWithContext(ctx, text)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+		return result.SanitizedPrompt, result.Violations, result.RedactedCount, 0, nil
+	}
+	result, err := p.GetSanitizer().SanitizeWithContext(ctx, text, sessionID)
+	if err != nil {
+		return "", nil, 0, 0, err
+	}
+	return result.SanitizedPrompt, result.Violations, result.RedactedCount, result.TokenizedCount, nil
+}
+
+func (p *Proxy) sanitizeToolDescriptions(ctx context.Context, tools any, stream bool, sessionID string) (any, []detector.Violation, int, int, error) {
+	allViolations := []detector.Violation{}
+	totalRedacted := 0
+	totalTokenized := 0
+	sanitize := func(text string) (string, error) {
+		sanitized, violations, redacted, tokenized, err := p.sanitizeResponseText(ctx, text, stream, sessionID)
+		if err != nil {
+			return "", err
+		}
+		allViolations = append(allViolations, violations...)
+		totalRedacted += redacted
+		totalTokenized += tokenized
+		return sanitized, nil
+	}
+	sanitized, err := sanitizeToolDescriptionValue(tools, sanitize)
+	if err != nil {
+		return nil, nil, 0, 0, err
+	}
+	return sanitized, allViolations, totalRedacted, totalTokenized, nil
+}
+
+func sanitizeToolDescriptionValue(value any, sanitize func(string) (string, error)) (any, error) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if key == "description" {
+				text, ok := nested.(string)
+				if !ok {
+					continue
+				}
+				sanitized, err := sanitize(text)
+				if err != nil {
+					return nil, err
+				}
+				typed[key] = sanitized
+				continue
+			}
+			sanitized, err := sanitizeToolDescriptionValue(nested, sanitize)
+			if err != nil {
+				return nil, err
+			}
+			typed[key] = sanitized
+		}
+		return typed, nil
+	case []any:
+		for i, nested := range typed {
+			sanitized, err := sanitizeToolDescriptionValue(nested, sanitize)
+			if err != nil {
+				return nil, err
+			}
+			typed[i] = sanitized
+		}
+		return typed, nil
+	default:
+		return value, nil
+	}
 }
 
 func (p *Proxy) sanitizeResponseInputWith(inputRaw json.RawMessage, sanitize sanitizeTextFunc, includeTokenized bool) (*ResponseSanitizationResult, error) {

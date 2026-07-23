@@ -9,7 +9,12 @@ import (
 	"eko/internal/core/slm"
 	"eko/internal/core/tokenizer"
 	"eko/internal/helpers/logger"
+	"eko/internal/proxy/anthropic"
+	"eko/internal/proxy/common"
+	"eko/internal/proxy/deepseek"
+	"eko/internal/proxy/gemini"
 	"eko/internal/proxy/openai"
+	proxyrouter "eko/internal/proxy/router"
 	"fmt"
 	"time"
 
@@ -57,10 +62,10 @@ func main() {
 	det.LoadDefaultPatterns()
 
 	// Initialize proxy handlers
-	openaiProxy := buildOpenAIProxy(cfg, san, resolver)
+	proxyRouter := buildProxyRouter(cfg, san, resolver)
 
 	// Initialize HTTP handlers
-	router := buildRouter(metrics, san, openaiProxy, sessionStore)
+	router := buildRouter(cfg, metrics, san, proxyRouter, sessionStore)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
@@ -70,11 +75,12 @@ func main() {
 		"readiness_endpoint": "http://localhost:8080/ready",
 		"metrics_endpoint":   "GET http://localhost:8080/metrics",
 		"sanitize_endpoint":  "POST http://localhost:8080/v1/sanitize",
+		"batch_endpoint":     "POST http://localhost:8080/v1/sanitize/batch",
 	}
 
-	if cfg.Proxy.OpenAI.Enabled {
-		logFields["openai_chat_completions"] = "POST http://localhost:8080/v1/chat/completions"
-		logFields["openai_responses"] = "POST http://localhost:8080/v1/responses"
+	if proxyRouter != nil {
+		logFields["chat_completions"] = "POST http://localhost:8080/v1/chat/completions"
+		logFields["responses"] = "POST http://localhost:8080/v1/responses"
 	}
 
 	logger.Info("Ekō server starting", logFields)
@@ -103,21 +109,63 @@ func buildSanitizer(cfg *config.Config, det *detector.Detector) (*sanitizer.Sani
 	return sanitizer.NewWithTokenizer(det, tok, store, mode), resolver, store
 }
 
-func buildOpenAIProxy(cfg *config.Config, san *sanitizer.Sanitizer, resolver *tokenizer.Resolver) *openai.Proxy {
-	if !cfg.Proxy.OpenAI.Enabled {
+func buildProxyRouter(cfg *config.Config, san *sanitizer.Sanitizer, resolver *tokenizer.Resolver) *proxyrouter.Proxy {
+	if !cfg.Proxy.OpenAI.Enabled && !cfg.Proxy.Anthropic.Enabled && !cfg.Proxy.Gemini.Enabled && !cfg.Proxy.DeepSeek.Enabled {
 		return nil
 	}
 
-	openaiProxy := openai.NewWithResolver(san, resolver, cfg.Proxy.OpenAI.BaseURL, cfg.Proxy.OpenAI.Timeout)
-	logger.Info("OpenAI proxy initialized", logger.Fields{
-		"base_url": cfg.Proxy.OpenAI.BaseURL,
-		"timeout":  cfg.Proxy.OpenAI.Timeout,
+	adapters := []common.Adapter{}
+	if cfg.Proxy.OpenAI.Enabled {
+		adapters = append(adapters, openai.NewAdapter(cfg.Proxy.OpenAI.BaseURL, cfg.Proxy.OpenAI.Timeout))
+	}
+	if cfg.Proxy.Anthropic.Enabled {
+		adapters = append(adapters, anthropic.New(cfg.Proxy.Anthropic.BaseURL, cfg.Proxy.Anthropic.Timeout))
+	}
+	if cfg.Proxy.Gemini.Enabled {
+		adapters = append(adapters, gemini.New(cfg.Proxy.Gemini.BaseURL, cfg.Proxy.Gemini.Timeout))
+	}
+	if cfg.Proxy.DeepSeek.Enabled {
+		adapters = append(adapters, deepseek.New(cfg.Proxy.DeepSeek.BaseURL, cfg.Proxy.DeepSeek.Timeout))
+	}
+
+	proxy := proxyrouter.New(san, resolver, proxyrouter.RoutingConfig{
+		DefaultProvider: providerName(cfg.Proxy.ModelRouting.DefaultProvider),
+		Models:          providerNameMap(cfg.Proxy.ModelRouting.Models),
+		Prefixes:        providerNameMap(cfg.Proxy.ModelRouting.Prefixes),
+	}, adapters)
+	logger.Info("Model routed proxy initialized", logger.Fields{
+		"default_provider":  cfg.Proxy.ModelRouting.DefaultProvider,
+		"openai_enabled":    cfg.Proxy.OpenAI.Enabled,
+		"anthropic_enabled": cfg.Proxy.Anthropic.Enabled,
+		"gemini_enabled":    cfg.Proxy.Gemini.Enabled,
+		"deepseek_enabled":  cfg.Proxy.DeepSeek.Enabled,
 	})
-	return openaiProxy
+	return proxy
 }
 
-func buildRouter(metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, openaiProxy *openai.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
+func providerName(value string) common.ProviderName {
+	if value == "google" {
+		return common.ProviderGemini
+	}
+	return common.ProviderName(value)
+}
+
+func providerNameMap(values map[string]string) map[string]common.ProviderName {
+	out := make(map[string]common.ProviderName, len(values))
+	for key, value := range values {
+		out[key] = providerName(value)
+	}
+	return out
+}
+
+func buildRouter(cfg *config.Config, metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, proxyRouter *proxyrouter.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
 	sanitizeHandler := handlers.NewSanitizeHandler(san)
+	batchSanitizeHandler := handlers.NewBatchSanitizeHandler(san, handlers.BatchSanitizeLimits{
+		MaxBatchItems:       cfg.Proxy.Behavior.MaxBatchItems,
+		MaxPromptBytes:      cfg.Proxy.Behavior.MaxPromptBytes,
+		MaxBatchBytes:       int64(cfg.Proxy.Behavior.MaxBatchBytes),
+		MaxBatchConcurrency: cfg.Proxy.Behavior.MaxBatchConcurrency,
+	}, metrics)
 	var healthChecker tokenizer.HealthChecker
 	if checker, ok := sessionStore.(tokenizer.HealthChecker); ok {
 		healthChecker = checker
@@ -126,7 +174,7 @@ func buildRouter(metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, o
 	metricsHandler := handlers.NewMetricsHandler(metrics)
 
 	router := gin.New()
-	routes.SetupRoutes(router, sanitizeHandler, healthHandler, metricsHandler, openaiProxy)
+	routes.SetupRoutes(router, sanitizeHandler, batchSanitizeHandler, healthHandler, metricsHandler, proxyRouter)
 	return router
 }
 

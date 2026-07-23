@@ -36,16 +36,13 @@ func TestServerBootsWithTokenizeMode(t *testing.T) {
 		t.Fatal("expected resolver to be initialized for tokenize mode")
 	}
 
-	openaiProxy := buildOpenAIProxy(cfg, san, resolver)
-	if openaiProxy == nil {
-		t.Fatal("expected openai proxy to be initialized")
-	}
-	if openaiProxy.GetResolver() == nil {
-		t.Fatal("expected openai proxy to receive resolver")
+	proxyRouter := buildProxyRouter(cfg, san, resolver)
+	if proxyRouter == nil {
+		t.Fatal("expected proxy router to be initialized")
 	}
 
 	metrics := handlers.NewMetricsCollector()
-	router := buildRouter(metrics, san, openaiProxy, store)
+	router := buildRouter(cfg, metrics, san, proxyRouter, store)
 	server := httptest.NewServer(router)
 	defer server.Close()
 

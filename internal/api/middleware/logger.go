@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"eko/internal/helpers/logger"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,7 +14,7 @@ func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		raw := c.Request.URL.RawQuery
+		raw := redactedRawQuery(c.Request.URL.Query())
 
 		// Process request
 		c.Next()
@@ -47,5 +49,31 @@ func Logger() gin.HandlerFunc {
 		} else {
 			logger.Info("HTTP Request", fields)
 		}
+	}
+}
+
+func redactedRawQuery(query url.Values) string {
+	if len(query) == 0 {
+		return ""
+	}
+	redacted := url.Values{}
+	for key, values := range query {
+		copied := append([]string(nil), values...)
+		if isSensitiveQueryParam(key) {
+			for i := range copied {
+				copied[i] = "[REDACTED]"
+			}
+		}
+		redacted[key] = copied
+	}
+	return redacted.Encode()
+}
+
+func isSensitiveQueryParam(key string) bool {
+	switch strings.ToLower(key) {
+	case "key", "api_key", "apikey", "access_token", "token", "auth", "authorization":
+		return true
+	default:
+		return false
 	}
 }

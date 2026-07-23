@@ -42,8 +42,12 @@ ekō/
 │       │   └── openai.go      # OpenAI-specific handling
 │       ├── anthropic/    # Anthropic proxy
 │       │   └── anthropic.go   # Anthropic-specific handling
-│       └── google/       # Google AI proxy
-│           └── google.go      # Google AI-specific handling
+│       ├── gemini/       # Gemini proxy
+│       │   └── gemini.go      # Gemini-specific handling
+│       ├── deepseek/     # DeepSeek proxy
+│       │   └── deepseek.go    # DeepSeek-specific handling
+│       └── router/       # Provider-neutral model router
+│           └── router.go      # Public proxy route handling
 │
 ├── pkg/                   # Public library code (reusable)
 │   └── (future public packages)
@@ -202,7 +206,9 @@ HTTP Request (OpenAI/Anthropic/Google format)
 - `common/proxy.go`: Shared proxy interface
 - `openai/openai.go`: OpenAI-specific logic
 - `anthropic/anthropic.go`: Anthropic-specific logic
-- `google/google.go`: Google AI-specific logic
+- `gemini/gemini.go`: Gemini-specific logic
+- `deepseek/deepseek.go`: DeepSeek-specific logic
+- `router/router.go`: Provider-neutral model routing and public proxy handlers
 
 **Responsibilities**:
 - Extract prompts from provider-specific formats

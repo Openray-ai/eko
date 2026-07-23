@@ -69,15 +69,15 @@ Use Ekō when teams need to adopt AI tooling without sending raw credentials, cu
 | Area | Status |
 | --- | --- |
 | Core sanitization API (`POST /v1/sanitize`) | ✅ Available |
-| OpenAI chat completions proxy (`POST /v1/chat/completions`) | ✅ Available |
-| OpenAI Responses API proxy (`POST /v1/responses`) | ✅ Available |
+| Batch sanitization API (`POST /v1/sanitize/batch`) | ✅ Available |
+| Multi-provider chat completions proxy (`POST /v1/chat/completions`) | ✅ Available |
+| Multi-provider Responses proxy (`POST /v1/responses`) | ✅ Available |
 | Prometheus metrics | ✅ Available |
 | Redaction mode | ✅ Available |
 | Tokenization mode | ✅ Available |
 | Redis-backed token vault | ✅ Available |
 | Optional SLM sidecar | ✅ Available, opt-in |
-| Anthropic proxy routes | 🚧 Roadmap |
-| Google proxy routes | 🚧 Roadmap |
+| Model routing for OpenAI, Anthropic, Gemini, and DeepSeek | ✅ Available |
 | Compliance report export endpoints | 🚧 Roadmap |
 
 ---
@@ -120,9 +120,9 @@ If you need custom configuration or patterns, prefer Docker Compose so the requi
 
 ---
 
-## 🔌 OpenAI Proxy (Recommended — Near-Zero Code Changes)
+## 🔌 Multi-Provider Proxy (Recommended — Near-Zero Code Changes)
 
-The easiest way to secure your AI stack. Ekō exposes OpenAI-compatible routes under `/v1`:
+The easiest way to secure your AI stack. Ekō exposes OpenAI-compatible routes under `/v1` and routes internally by the requested `model`:
 
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
@@ -149,10 +149,40 @@ response = client.chat.completions.create(
 **Environment variable form:**
 ```bash
 export OPENAI_BASE_URL="http://localhost:8080/v1"
-# Now all OpenAI calls are automatically protected
+# Now supported OpenAI-compatible calls are automatically protected
 ```
 
-Ekō forwards the sanitized request to the configured upstream OpenAI base URL. For non-streaming requests in tokenization mode, Ekō can also resolve response tokens back through the session vault before returning the response. Streaming requests are sanitized in redaction mode because response token resolution is not supported on streamed chunks.
+Ekō forwards the sanitized request to the configured upstream provider selected by model routing. For enabled providers, default prefixes route `gpt-*` and `o*` models to OpenAI, `claude-*` to Anthropic, `gemini-*` to Gemini, and `deepseek-*` to DeepSeek. For non-streaming requests in tokenization mode, Ekō can also resolve response tokens back through the session vault before returning the response. Streaming requests are sanitized in redaction mode because response token resolution is not supported on streamed chunks.
+
+**Model routing examples:**
+
+```bash
+# OpenAI
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+
+# Anthropic through the same public route
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}'
+
+# Gemini through the same public route
+curl -X POST "http://localhost:8080/v1/chat/completions?key=$GEMINI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-1.5-pro","messages":[{"role":"user","content":"hello"}]}'
+
+# DeepSeek through the same public route
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hello"}]}'
+```
+
+Provider adapters fail closed: unsupported tools, multimodal payloads, JSON mode, or provider-incompatible Responses features return `400` instead of being silently dropped. `/v1/responses` remains one endpoint and uses provider-specific internal response managers for compatible text workflows.
 
 **Useful response headers:**
 
@@ -166,8 +196,6 @@ Ekō forwards the sanitized request to the configured upstream OpenAI base URL. 
 | `X-Eko-Sanitization-Override` | Explains forced behavior, such as streaming fallback |
 | `X-Eko-Resolve-Status` | Response token resolution result |
 | `X-Eko-Violation-Summary` | Compact summary of violation types |
-
-> **Anthropic & Google proxies:** routes are on the roadmap. For now, use the Core API below to sanitize prompts before passing them to those SDKs directly.
 
 ---
 
@@ -234,6 +262,100 @@ curl -X POST http://localhost:8080/v1/sanitize \
 ```
 
 If you don't provide a `session_id`, Ekō generates one and returns it.
+
+---
+
+## 🧩 Batch API — `POST /v1/sanitize/batch`
+
+For bulk workflows, submit multiple sanitization items in one request:
+
+```bash
+curl -X POST http://localhost:8080/v1/sanitize/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "id": "prompt-001",
+        "prompt": "My BVN is 12345678901",
+        "sanitization_mode": "redact"
+      },
+      {
+        "id": "prompt-002",
+        "prompt": "Email jane@example.com before sending this to the model",
+        "sanitization_mode": "mask",
+        "slm": false
+      }
+    ]
+  }'
+```
+
+The top-level request accepts only `items`. Each item has the same controls as the single sanitize endpoint:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `id` | No | Caller-provided identifier returned in the matching result |
+| `prompt` | Yes | Text to inspect and sanitize |
+| `session_id` | No | Existing Ekō session for stable token reuse |
+| `sanitization_mode` | No | Per-item override: `redact` or `tokenize` |
+| `slm` | No | Opt this item into contextual SLM detection |
+
+Batch responses use partial success. Valid items are processed even when another item fails validation:
+
+```json
+{
+  "results": [
+    {
+      "id": "prompt-001",
+      "ok": true,
+      "result": {
+        "sanitized_prompt": "My BVN is [REDACTED_BVN]",
+        "violations": [
+          {
+            "type": "pii",
+            "severity": "BLOCK",
+            "pattern": "nigerian_bvn",
+            "matched": "12345678901",
+            "position": 10
+          }
+        ],
+        "safe": false,
+        "processing_time_ms": 1.2,
+        "redacted_count": 1,
+        "tokenized_count": 0,
+        "session_id": "eko_123e4567-e89b-12d3-a456-426614174000"
+      }
+    },
+    {
+      "id": "prompt-002",
+      "ok": false,
+      "error": {
+        "code": "invalid_sanitization_mode",
+        "message": "invalid sanitization_mode"
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "succeeded": 1,
+    "failed": 1,
+    "violations": 1,
+    "redacted": 1,
+    "tokenized": 0,
+    "processing_time_ms": 2.4
+  }
+}
+```
+
+Batch safety limits are config-backed:
+
+```yaml
+proxy:
+  behavior:
+    max_batch_items: 100
+    max_prompt_bytes: 65536
+    max_batch_bytes: 1048576
+    max_batch_concurrency: 1
+```
 
 ---
 
@@ -305,6 +427,10 @@ Important sections:
 | `server` | Host and port |
 | `logging` | Log level, format, color, and output file |
 | `proxy.openai` | OpenAI proxy enablement, upstream base URL, and timeout |
+| `proxy.anthropic` | Anthropic provider enablement, upstream base URL, and timeout |
+| `proxy.gemini` | Gemini provider enablement, upstream base URL, and timeout |
+| `proxy.deepseek` | DeepSeek provider enablement, upstream base URL, and timeout |
+| `proxy.model_routing` | Exact model and prefix routing to upstream providers |
 | `proxy.behavior` | Violation behavior, sanitization mode, token store, and TTL |
 | `proxy.redis` | Redis-backed token vault settings |
 | `proxy.crypto` | Local or Vault Transit key provider settings |
@@ -312,8 +438,6 @@ Important sections:
 | `patterns` | Default and custom pattern locations |
 | `alerts` | Webhook and email alerting |
 | `compliance` | Reporting, retention, and allowed browser origins |
-
-> `proxy.anthropic` and `proxy.google` sections exist in the example config, but those proxy routes are not yet served — they are roadmap items.
 
 > **Secrets**: do not commit `local_master_key`, the Vault `token`, or provider API keys to source control. Inject them through your secrets manager at deploy time.
 
@@ -438,6 +562,10 @@ eko_violations_total 312
 # HELP eko_uptime_seconds Number of seconds since the process started
 # TYPE eko_uptime_seconds gauge
 eko_uptime_seconds 3600.00
+
+# HELP eko_batch_requests_total Total number of batch sanitization requests received
+# TYPE eko_batch_requests_total counter
+eko_batch_requests_total 12
 ```
 
 Add Ekō to your `prometheus.yml`:
@@ -488,15 +616,15 @@ Safe AI adoption across departments — Marketing, Finance, and Legal all route 
 
 **✅ Phase 1: Core (Current)**
 - Core detection engine
-- OpenAI chat completions + Responses proxy
+- OpenAI-compatible chat completions + Responses proxy
+- Model routing for OpenAI, Anthropic, Gemini, and DeepSeek
 - African-specific patterns (BVN, M-Pesa, NUBAN, regional phones)
 - Redaction and session-aware tokenization (memory + Redis vault)
 - Prometheus-compatible metrics endpoint
 - Docker / Docker Compose deployment
 
 **🚧 Phase 2: Enterprise (Next)**
-- Anthropic proxy routes
-- Google AI proxy routes
+- Expanded provider capabilities for tools, multimodal inputs, and richer streaming normalization
 - Open WebUI deployment examples
 - Admin dashboard
 - SSO integration (SAML, LDAP, AD)
@@ -516,7 +644,7 @@ Safe AI adoption across departments — Marketing, Finance, and Legal all route 
 We welcome contributions! Areas where we especially need help:
 
 - **New patterns** for African contexts (formats, regulations, institutions)
-- **Provider integrations** (Anthropic, Google, Cohere, Mistral, etc.)
+- **Provider integrations** (Cohere, Mistral, additional OpenAI-compatible providers, etc.)
 - **Documentation** (tutorials, use cases, translations)
 - **Testing** (edge cases, performance benchmarks)
 

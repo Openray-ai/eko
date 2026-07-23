@@ -21,10 +21,28 @@ proxy:
     base_url: "https://api.anthropic.com/v1"
     timeout: 30
 
-  google:
+  gemini:
     enabled: true
     base_url: "https://generativelanguage.googleapis.com/v1"
     timeout: 30
+
+  deepseek:
+    enabled: true
+    base_url: "https://api.deepseek.com/v1"
+    timeout: 30
+
+  # Model routing keeps the public API OpenAI-compatible while selecting the
+  # correct upstream provider from the requested model name. Exact model
+  # matches win over prefixes; prefixes win over the default provider.
+  model_routing:
+    default_provider: "openai"
+    models: {}
+    prefixes:
+      "gpt-": "openai"
+      "o": "openai"
+      "claude-": "anthropic"
+      "gemini-": "gemini"
+      "deepseek-": "deepseek"
 
   behavior:
     on_violation: "sanitize"  # Options: block, sanitize, warn
@@ -33,6 +51,10 @@ proxy:
     sanitization_mode: "tokenize"  # Options: redact, tokenize
     token_store_backend: "memory"  # Options: memory, redis
     token_ttl_ms: 30000            # Token vault TTL in ms (tokenize mode only)
+    max_batch_items: 100           # Maximum items accepted by POST /v1/sanitize/batch
+    max_prompt_bytes: 65536        # Maximum prompt size per batch item
+    max_batch_bytes: 1048576       # Maximum JSON request body size for batch requests
+    max_batch_concurrency: 1       # Reserved for future bounded parallel batch processing
 
   redis:
     addr: "127.0.0.1:6379"
