@@ -201,7 +201,7 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionAddsHeaders(t *testing.T) 
 	router := gin.New()
 	router.POST("/v1/chat/completions", proxy.HandleChatCompletion)
 
-	rec := performRequest(router, "/v1/chat/completions", `{"model":"gpt","messages":[{"role":"user","content":"email john@acme.com"}]}`, map[string]string{
+	rec := performRequest(router, "/v1/chat/completions", `{"model":"gpt","tools":[{"type":"function","function":{"name":"lookup","description":"email tooldef@example.com","parameters":{"type":"object","properties":{"account":{"type":"string","description":"email param@example.com"}}}}}],"messages":[{"role":"user","content":"email john@acme.com"}]}`, map[string]string{
 		"Content-Type": "application/json",
 	})
 
@@ -215,16 +215,18 @@ func TestProxy_TokenizeMode_NonStreamingChatCompletionAddsHeaders(t *testing.T) 
 	if got := rec.Header().Get("X-Eko-Sanitization-Override"); got != "" {
 		t.Fatalf("expected no sanitization override for non-streaming, got %q", got)
 	}
-	if got := rec.Header().Get("X-Eko-Tokens-Issued"); got != "1" {
-		t.Fatalf("expected tokens issued header 1, got %q", got)
+	if got := rec.Header().Get("X-Eko-Tokens-Issued"); got != "3" {
+		t.Fatalf("expected tokens issued header 3, got %q", got)
 	}
 	if got := rec.Header().Get("X-Eko-Session-ID"); got == "" {
 		t.Fatal("expected session id header to be set")
 	}
 
 	capturedBody := capture.Body()
-	if strings.Contains(capturedBody, "john@acme.com") {
-		t.Fatalf("expected tokenized request body to not contain original email: %s", capturedBody)
+	for _, leaked := range []string{"john@acme.com", "tooldef@example.com", "param@example.com"} {
+		if strings.Contains(capturedBody, leaked) {
+			t.Fatalf("expected tokenized request body to not contain original email: %s", capturedBody)
+		}
 	}
 	if strings.Contains(capturedBody, "[REDACTED") {
 		t.Fatalf("expected tokenized request body to avoid redaction labels: %s", capturedBody)
@@ -442,6 +444,38 @@ func TestProxy_TokenizeMode_NonStreamingResponsesResolvesTokens(t *testing.T) {
 	}
 }
 
+func TestProxy_SanitizesResponsesInstructions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	capture := &requestCapture{}
+	server := newOpenAITestServerWithResponseCapture(capture)
+	defer server.Close()
+
+	det := detector.New()
+	loadTestPatterns(t, det)
+	proxy := NewWithResolver(sanitizer.New(det), nil, server.URL, 5)
+
+	router := gin.New()
+	router.POST("/v1/responses", proxy.HandleResponse)
+
+	rec := performRequest(router, "/v1/responses", `{"model":"gpt","instructions":"email instructions@example.com","tools":[{"type":"function","name":"lookup","description":"email response-tool@example.com","parameters":{"type":"object","properties":{"account":{"type":"string","description":"email response-param@example.com"}}}}],"input":"email input@example.com"}`, map[string]string{
+		"Content-Type": "application/json",
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	upstream := capture.Body()
+	for _, leaked := range []string{"instructions@example.com", "input@example.com", "response-tool@example.com", "response-param@example.com"} {
+		if strings.Contains(upstream, leaked) {
+			t.Fatalf("expected Responses text fields to be sanitized, got %s", upstream)
+		}
+	}
+	if !strings.Contains(upstream, `"instructions"`) {
+		t.Fatalf("expected sanitized instructions to be forwarded, got %s", upstream)
+	}
+}
+
 func TestProxy_TokenizeMode_NonStreamingResponsesSanitizeStoreFailureReturns503(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -596,6 +630,18 @@ func newOpenAITestServerWithCapture(capture *requestCapture, streaming bool) *ht
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"id":"chatcmpl_test"}`))
+	})
+	return httptest.NewServer(mux)
+}
+
+func newOpenAITestServerWithResponseCapture(capture *requestCapture) *httptest.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/responses", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		capture.Set(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"response_test"}`))
 	})
 	return httptest.NewServer(mux)
 }

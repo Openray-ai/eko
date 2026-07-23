@@ -21,10 +21,28 @@ proxy:
     base_url: "https://api.anthropic.com/v1"
     timeout: 30
 
-  google:
+  gemini:
     enabled: true
     base_url: "https://generativelanguage.googleapis.com/v1"
     timeout: 30
+
+  deepseek:
+    enabled: true
+    base_url: "https://api.deepseek.com/v1"
+    timeout: 30
+
+  # Model routing keeps the public API OpenAI-compatible while selecting the
+  # correct upstream provider from the requested model name. Exact model
+  # matches win over prefixes; prefixes win over the default provider.
+  model_routing:
+    default_provider: "openai"
+    models: {}
+    prefixes:
+      "gpt-": "openai"
+      "o": "openai"
+      "claude-": "anthropic"
+      "gemini-": "gemini"
+      "deepseek-": "deepseek"
 
   behavior:
     on_violation: "sanitize"  # Options: block, sanitize, warn
