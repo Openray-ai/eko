@@ -69,6 +69,7 @@ Use Ekō when teams need to adopt AI tooling without sending raw credentials, cu
 | Area | Status |
 | --- | --- |
 | Core sanitization API (`POST /v1/sanitize`) | ✅ Available |
+| Batch sanitization API (`POST /v1/sanitize/batch`) | ✅ Available |
 | Multi-provider chat completions proxy (`POST /v1/chat/completions`) | ✅ Available |
 | Multi-provider Responses proxy (`POST /v1/responses`) | ✅ Available |
 | Prometheus metrics | ✅ Available |
@@ -261,6 +262,100 @@ curl -X POST http://localhost:8080/v1/sanitize \
 ```
 
 If you don't provide a `session_id`, Ekō generates one and returns it.
+
+---
+
+## 🧩 Batch API — `POST /v1/sanitize/batch`
+
+For bulk workflows, submit multiple sanitization items in one request:
+
+```bash
+curl -X POST http://localhost:8080/v1/sanitize/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "id": "prompt-001",
+        "prompt": "My BVN is 12345678901",
+        "sanitization_mode": "redact"
+      },
+      {
+        "id": "prompt-002",
+        "prompt": "Email jane@example.com before sending this to the model",
+        "sanitization_mode": "mask",
+        "slm": false
+      }
+    ]
+  }'
+```
+
+The top-level request accepts only `items`. Each item has the same controls as the single sanitize endpoint:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `id` | No | Caller-provided identifier returned in the matching result |
+| `prompt` | Yes | Text to inspect and sanitize |
+| `session_id` | No | Existing Ekō session for stable token reuse |
+| `sanitization_mode` | No | Per-item override: `redact` or `tokenize` |
+| `slm` | No | Opt this item into contextual SLM detection |
+
+Batch responses use partial success. Valid items are processed even when another item fails validation:
+
+```json
+{
+  "results": [
+    {
+      "id": "prompt-001",
+      "ok": true,
+      "result": {
+        "sanitized_prompt": "My BVN is [REDACTED_BVN]",
+        "violations": [
+          {
+            "type": "pii",
+            "severity": "BLOCK",
+            "pattern": "nigerian_bvn",
+            "matched": "12345678901",
+            "position": 10
+          }
+        ],
+        "safe": false,
+        "processing_time_ms": 1.2,
+        "redacted_count": 1,
+        "tokenized_count": 0,
+        "session_id": "eko_123e4567-e89b-12d3-a456-426614174000"
+      }
+    },
+    {
+      "id": "prompt-002",
+      "ok": false,
+      "error": {
+        "code": "invalid_sanitization_mode",
+        "message": "invalid sanitization_mode"
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "succeeded": 1,
+    "failed": 1,
+    "violations": 1,
+    "redacted": 1,
+    "tokenized": 0,
+    "processing_time_ms": 2.4
+  }
+}
+```
+
+Batch safety limits are config-backed:
+
+```yaml
+proxy:
+  behavior:
+    max_batch_items: 100
+    max_prompt_bytes: 65536
+    max_batch_bytes: 1048576
+    max_batch_concurrency: 1
+```
 
 ---
 
@@ -467,6 +562,10 @@ eko_violations_total 312
 # HELP eko_uptime_seconds Number of seconds since the process started
 # TYPE eko_uptime_seconds gauge
 eko_uptime_seconds 3600.00
+
+# HELP eko_batch_requests_total Total number of batch sanitization requests received
+# TYPE eko_batch_requests_total counter
+eko_batch_requests_total 12
 ```
 
 Add Ekō to your `prometheus.yml`:

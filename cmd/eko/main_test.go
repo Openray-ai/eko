@@ -42,7 +42,7 @@ func TestServerBootsWithTokenizeMode(t *testing.T) {
 	}
 
 	metrics := handlers.NewMetricsCollector()
-	router := buildRouter(metrics, san, proxyRouter, store)
+	router := buildRouter(cfg, metrics, san, proxyRouter, store)
 	server := httptest.NewServer(router)
 	defer server.Close()
 

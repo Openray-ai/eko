@@ -11,6 +11,7 @@ import (
 func SetupRoutes(
 	router *gin.Engine,
 	sanitizeHandler *handlers.SanitizeHandler,
+	batchSanitizeHandler *handlers.BatchSanitizeHandler,
 	healthHandler *handlers.HealthHandler,
 	metricsHandler *handlers.MetricsHandler,
 	proxyRouter *proxyrouter.Proxy,
@@ -32,6 +33,7 @@ func SetupRoutes(
 	{
 		// Sanitization endpoint
 		v1.POST("/sanitize", sanitizeHandler.Handle)
+		v1.POST("/sanitize/batch", batchSanitizeHandler.Handle)
 
 		// OpenAI-compatible multi-provider proxy endpoints
 		if proxyRouter != nil {

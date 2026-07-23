@@ -27,6 +27,13 @@ type MetricsCollector struct {
 	slmLatencySumMs       atomic.Int64
 	slmLatencyCount       atomic.Int64
 	slmBreakerOpen        atomic.Bool
+
+	batchRequestsTotal     atomic.Int64
+	batchItemsTotal        atomic.Int64
+	batchItemFailuresTotal atomic.Int64
+	batchViolationsTotal   atomic.Int64
+	batchLatencySumMs      atomic.Int64
+	batchLatencyCount      atomic.Int64
 }
 
 // NewMetricsCollector returns a MetricsCollector with its start time set to now.
@@ -38,6 +45,16 @@ func (m *MetricsCollector) IncRequests()          { m.requestsTotal.Add(1) }
 func (m *MetricsCollector) IncSanitizations()     { m.sanitizationsTotal.Add(1) }
 func (m *MetricsCollector) AddViolations(n int64) { m.violationsTotal.Add(n) }
 func (m *MetricsCollector) IncErrors()            { m.errorsTotal.Add(1) }
+func (m *MetricsCollector) IncBatchRequests()     { m.batchRequestsTotal.Add(1) }
+func (m *MetricsCollector) AddBatchItems(n int64) { m.batchItemsTotal.Add(n) }
+func (m *MetricsCollector) AddBatchItemFailures(n int64) {
+	m.batchItemFailuresTotal.Add(n)
+}
+func (m *MetricsCollector) AddBatchViolations(n int64) { m.batchViolationsTotal.Add(n) }
+func (m *MetricsCollector) AddBatchLatency(d time.Duration) {
+	m.batchLatencySumMs.Add(d.Milliseconds())
+	m.batchLatencyCount.Add(1)
+}
 
 // SLM-facing methods. These satisfy slm.Metrics so the slm package can stay
 // decoupled from the handlers package.
@@ -73,6 +90,10 @@ func (h *MetricsHandler) Handle(c *gin.Context) {
 	slmBreakerOpen := 0
 	if col.slmBreakerOpen.Load() {
 		slmBreakerOpen = 1
+	}
+	batchLatencyAvgMs := 0.0
+	if cnt := col.batchLatencyCount.Load(); cnt > 0 {
+		batchLatencyAvgMs = float64(col.batchLatencySumMs.Load()) / float64(cnt)
 	}
 
 	body := fmt.Sprintf(`# HELP eko_requests_total Total number of HTTP requests received
@@ -126,6 +147,26 @@ eko_slm_latency_avg_ms %.2f
 # HELP eko_slm_breaker_open 1 if the SLM circuit breaker is currently open
 # TYPE eko_slm_breaker_open gauge
 eko_slm_breaker_open %d
+
+# HELP eko_batch_requests_total Total number of batch sanitization requests received
+# TYPE eko_batch_requests_total counter
+eko_batch_requests_total %d
+
+# HELP eko_batch_items_total Total number of batch sanitization items processed
+# TYPE eko_batch_items_total counter
+eko_batch_items_total %d
+
+# HELP eko_batch_item_failures_total Total number of batch sanitization items that failed
+# TYPE eko_batch_item_failures_total counter
+eko_batch_item_failures_total %d
+
+# HELP eko_batch_violations_total Total number of violations detected by batch sanitization
+# TYPE eko_batch_violations_total counter
+eko_batch_violations_total %d
+
+# HELP eko_batch_latency_avg_ms Average batch request latency in milliseconds (rolling)
+# TYPE eko_batch_latency_avg_ms gauge
+eko_batch_latency_avg_ms %.2f
 `,
 		col.requestsTotal.Load(),
 		col.sanitizationsTotal.Load(),
@@ -140,6 +181,11 @@ eko_slm_breaker_open %d
 		col.slmSkippedBreakerOpen.Load(),
 		slmLatencyAvgMs,
 		slmBreakerOpen,
+		col.batchRequestsTotal.Load(),
+		col.batchItemsTotal.Load(),
+		col.batchItemFailuresTotal.Load(),
+		col.batchViolationsTotal.Load(),
+		batchLatencyAvgMs,
 	)
 
 	c.Data(http.StatusOK, "text/plain; version=0.0.4; charset=utf-8", []byte(body))

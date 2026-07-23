@@ -65,7 +65,7 @@ func main() {
 	proxyRouter := buildProxyRouter(cfg, san, resolver)
 
 	// Initialize HTTP handlers
-	router := buildRouter(metrics, san, proxyRouter, sessionStore)
+	router := buildRouter(cfg, metrics, san, proxyRouter, sessionStore)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
@@ -75,6 +75,7 @@ func main() {
 		"readiness_endpoint": "http://localhost:8080/ready",
 		"metrics_endpoint":   "GET http://localhost:8080/metrics",
 		"sanitize_endpoint":  "POST http://localhost:8080/v1/sanitize",
+		"batch_endpoint":     "POST http://localhost:8080/v1/sanitize/batch",
 	}
 
 	if proxyRouter != nil {
@@ -157,8 +158,14 @@ func providerNameMap(values map[string]string) map[string]common.ProviderName {
 	return out
 }
 
-func buildRouter(metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, proxyRouter *proxyrouter.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
+func buildRouter(cfg *config.Config, metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, proxyRouter *proxyrouter.Proxy, sessionStore tokenizer.SessionStore) *gin.Engine {
 	sanitizeHandler := handlers.NewSanitizeHandler(san)
+	batchSanitizeHandler := handlers.NewBatchSanitizeHandler(san, handlers.BatchSanitizeLimits{
+		MaxBatchItems:       cfg.Proxy.Behavior.MaxBatchItems,
+		MaxPromptBytes:      cfg.Proxy.Behavior.MaxPromptBytes,
+		MaxBatchBytes:       int64(cfg.Proxy.Behavior.MaxBatchBytes),
+		MaxBatchConcurrency: cfg.Proxy.Behavior.MaxBatchConcurrency,
+	}, metrics)
 	var healthChecker tokenizer.HealthChecker
 	if checker, ok := sessionStore.(tokenizer.HealthChecker); ok {
 		healthChecker = checker
@@ -167,7 +174,7 @@ func buildRouter(metrics *handlers.MetricsCollector, san *sanitizer.Sanitizer, p
 	metricsHandler := handlers.NewMetricsHandler(metrics)
 
 	router := gin.New()
-	routes.SetupRoutes(router, sanitizeHandler, healthHandler, metricsHandler, proxyRouter)
+	routes.SetupRoutes(router, sanitizeHandler, batchSanitizeHandler, healthHandler, metricsHandler, proxyRouter)
 	return router
 }
 
